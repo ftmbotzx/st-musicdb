@@ -2,9 +2,10 @@ import logging
 import re
 import asyncio
 from datetime import datetime
-from pyrogram import Client, filters
+from pyrogram.client import Client
+from pyrogram import filters
 from pyrogram.types import Message
-from pyrogram.errors import ChannelPrivate, ChatAdminRequired, UsernameNotOccupied
+from pyrogram.errors import ChannelPrivate, ChatAdminRequired, UsernameNotOccupied, FloodWait
 from bot.database import DatabaseManager
 from bot.utils import extract_track_info, format_file_caption, get_file_metadata
 
@@ -34,10 +35,30 @@ async def handle_media_message(client: Client, message: Message):
         # Extract track information from caption
         track_info = extract_track_info(message.caption) if message.caption else {}
         
-        # Forward file to backup channel
+        # Forward file to backup channel with rate limiting
         backup_file_id = await forward_to_backup(client, message)
         
-        # Prepare document for MongoDB
+        # Get additional audio metadata if available
+        audio_metadata = {}
+        if message.audio:
+            audio_metadata.update({
+                "performer": message.audio.performer,
+                "title": message.audio.title,
+                "thumbnail": message.audio.thumbs[0].file_id if message.audio.thumbs else None
+            })
+        elif message.video:
+            audio_metadata.update({
+                "thumbnail": message.video.thumbs[0].file_id if message.video.thumbs else None
+            })
+        elif message.document and message.document.thumbs:
+            audio_metadata.update({
+                "thumbnail": message.document.thumbs[0].file_id
+            })
+        
+        # Add rate limiting for media processing
+        await asyncio.sleep(0.3)  # Small delay to prevent rate limits
+        
+        # Prepare comprehensive document for MongoDB
         document = {
             "file_id": file_data["file_id"],
             "backup_file_id": backup_file_id,
@@ -51,14 +72,18 @@ async def handle_media_message(client: Client, message: Message):
             "width": file_data.get("width"),
             "height": file_data.get("height"),
             "chat_id": message.chat.id,
-            "chat_title": message.chat.title or message.chat.first_name,
+            "chat_title": message.chat.title or (message.chat.first_name if message.chat.first_name else "Unknown"),
             "message_id": message.id,
             "sender_id": message.from_user.id if message.from_user else None,
             "sender_username": message.from_user.username if message.from_user else None,
+            "sender_first_name": message.from_user.first_name if message.from_user else None,
+            "sender_last_name": message.from_user.last_name if message.from_user else None,
             "date": message.date.isoformat(),
             "is_deleted": False,
             "track_url": track_info.get("track_url"),
-            "track_id": track_info.get("track_id")
+            "track_id": track_info.get("track_id"),
+            "platform": track_info.get("platform"),
+            **audio_metadata  # Include performer, title, thumbnail if available
         }
         
         # Store in MongoDB
@@ -83,43 +108,53 @@ async def forward_to_backup(client: Client, message: Message):
         # Extract track info for caption
         track_info = extract_track_info(message.text or message.caption or "")
         
-        # Create detailed caption
-        backup_caption = format_file_caption(message)
+        # Create detailed caption with track ID prominently displayed
+        backup_caption = format_file_caption(message, include_track_id=True)
         
         # Send file to backup channel with proper caption based on file type
         forwarded_msg = None
         
-        if message.audio:
-            forwarded_msg = await client.send_audio(
-                chat_id=backup_channel_id,
-                audio=message.audio.file_id,
-                caption=backup_caption,
-                duration=message.audio.duration,
-                performer=message.audio.performer,
-                title=message.audio.title
-            )
-        elif message.video:
-            forwarded_msg = await client.send_video(
-                chat_id=backup_channel_id,
-                video=message.video.file_id,
-                caption=backup_caption,
-                duration=message.video.duration,
-                width=message.video.width,
-                height=message.video.height
-            )
-        elif message.document:
-            forwarded_msg = await client.send_document(
-                chat_id=backup_channel_id,
-                document=message.document.file_id,
-                caption=backup_caption,
-                file_name=message.document.file_name
-            )
-        elif message.photo:
-            forwarded_msg = await client.send_photo(
-                chat_id=backup_channel_id,
-                photo=message.photo.file_id,
-                caption=backup_caption
-            )
+        try:
+            if message.audio:
+                forwarded_msg = await client.send_audio(
+                    chat_id=backup_channel_id,
+                    audio=message.audio.file_id,
+                    caption=backup_caption,
+                    duration=message.audio.duration,
+                    performer=message.audio.performer,
+                    title=message.audio.title
+                )
+            elif message.video:
+                forwarded_msg = await client.send_video(
+                    chat_id=backup_channel_id,
+                    video=message.video.file_id,
+                    caption=backup_caption,
+                    duration=message.video.duration,
+                    width=message.video.width,
+                    height=message.video.height
+                )
+            elif message.document:
+                forwarded_msg = await client.send_document(
+                    chat_id=backup_channel_id,
+                    document=message.document.file_id,
+                    caption=backup_caption,
+                    file_name=message.document.file_name
+                )
+            elif message.photo:
+                forwarded_msg = await client.send_photo(
+                    chat_id=backup_channel_id,
+                    photo=message.photo.file_id,
+                    caption=backup_caption
+                )
+            
+            # Add rate limiting delay to avoid FloodWait errors
+            await asyncio.sleep(0.5)  # Small delay between operations
+                
+        except FloodWait as e:
+            logger.warning(f"Rate limit hit, waiting {e.value} seconds")
+            await asyncio.sleep(float(e.value))
+            # Retry the operation
+            return await forward_to_backup(client, message)
         
         if forwarded_msg:
             backup_file_data = get_file_metadata(forwarded_msg)
@@ -290,7 +325,18 @@ async def handle_message_link(client: Client, message: Message):
             # Try to get chat info
             try:
                 chat = await client.get_chat(channel_username)
-                chat_id = chat.id
+                # Handle different chat types
+                if hasattr(chat, 'id'):
+                    chat_id = chat.id
+                else:
+                    # For ChatPreview objects, try to extract ID from username
+                    try:
+                        chat_full = await client.get_chat(f"@{channel_username}")
+                        chat_id = chat_full.id
+                    except:
+                        await message.reply(f"❌ Cannot access channel @{channel_username}. Please make sure the bot has access.")
+                        return
+                
                 chat_title = getattr(chat, 'title', None) or getattr(chat, 'username', None) or channel_username
                 
                 await start_indexing_process(client, message, chat_id, message_id, chat_title)
@@ -561,6 +607,126 @@ async def handle_stop_index_command(client: Client, message: Message):
     indexing_process["stop_requested"] = True
     await message.reply("⚠️ Stopping indexing process...")
 
+async def handle_db_command(client: Client, message: Message):
+    """Handle /db command to export database as PDF"""
+    try:
+        await message.reply("📊 Generating database export PDF... This may take a few moments.")
+        
+        # Get all files from database
+        files = db.get_all_files()
+        
+        if not files:
+            await message.reply("📁 Database is empty. No files to export.")
+            return
+        
+        # Generate PDF
+        from reportlab.lib.pagesizes import A4
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib import colors
+        from reportlab.lib.units import inch
+        from datetime import datetime
+        import tempfile
+        import os
+        
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+            pdf_path = tmp_file.name
+        
+        # Create PDF document
+        doc = SimpleDocTemplate(pdf_path, pagesize=A4, 
+                               rightMargin=72, leftMargin=72, 
+                               topMargin=72, bottomMargin=18)
+        
+        # Container for PDF elements
+        story = []
+        
+        # Styles
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=20,
+            spaceAfter=30,
+            alignment=1  # Center
+        )
+        
+        # Title
+        title = Paragraph("📊 Media Indexer Database Export", title_style)
+        story.append(title)
+        
+        # Statistics
+        stats = db.get_statistics()
+        stats_text = f"""
+        <b>Database Statistics:</b><br/>
+        • Total Files: {stats['total_files']}<br/>
+        • Audio Files: {stats['audio_files']}<br/>
+        • Video Files: {stats['video_files']}<br/>
+        • Document Files: {stats['document_files']}<br/>
+        • Photo Files: {stats['photo_files']}<br/>
+        • Files with Track URLs: {stats['files_with_tracks']}<br/>
+        • Export Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        """
+        stats_para = Paragraph(stats_text, styles['Normal'])
+        story.append(stats_para)
+        story.append(Spacer(1, 20))
+        
+        # Prepare table data
+        data = [['#', 'File Name', 'Type', 'Size (MB)', 'Duration', 'Track ID', 'Source', 'Date']]
+        
+        for i, file_doc in enumerate(files[:1000], 1):  # Limit to 1000 files for PDF
+            file_name = file_doc.get('file_name', 'Unknown')[:30]  # Truncate long names
+            file_type = file_doc.get('file_type', 'Unknown')
+            file_size = file_doc.get('file_size', 0)
+            size_mb = f"{round(file_size / (1024 * 1024), 2):.2f}" if file_size else "0"
+            duration = file_doc.get('duration', 0)
+            duration_str = f"{duration//60:02d}:{duration%60:02d}" if duration else "N/A"
+            track_id = file_doc.get('track_id', 'N/A')[:20]  # Truncate long IDs
+            source = file_doc.get('chat_title', 'Unknown')[:20]
+            date = file_doc.get('date', '')[:10]  # Just date part
+            
+            data.append([
+                str(i), file_name, file_type, size_mb, 
+                duration_str, track_id, source, date
+            ])
+        
+        # Create table
+        table = Table(data)
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 8),
+            ('FONTSIZE', (0, 1), (-1, -1), 6),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        ]))
+        
+        story.append(table)
+        
+        # Build PDF
+        doc.build(story)
+        
+        # Send PDF file
+        with open(pdf_path, 'rb') as pdf_file:
+            await client.send_document(
+                chat_id=message.chat.id,
+                document=pdf_path,
+                file_name=f"database_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                caption=f"📊 Database Export\n\n📁 Total Files: {len(files)}\n📅 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+        
+        # Clean up temporary file
+        os.unlink(pdf_path)
+        
+        await message.reply("✅ Database export completed successfully!")
+        
+    except Exception as e:
+        logger.error(f"Error generating database export: {e}")
+        await message.reply(f"❌ Failed to generate database export: {str(e)}")
+
 async def handle_forwarded_message(client: Client, message: Message):
     """Handle forwarded messages to automatically start indexing"""
     global indexing_process
@@ -587,6 +753,7 @@ def setup_handlers(app: Client):
     app.on_message(filters.command("sendid"))(handle_sendid_command)
     app.on_message(filters.command("stats"))(handle_stats_command)
     app.on_message(filters.command("stop_index"))(handle_stop_index_command)
+    app.on_message(filters.command("db"))(handle_db_command)
     
     # Message link handler
     app.on_message(filters.text & filters.regex(r"https://t\.me/[^/]+/\d+") & ~filters.bot)(handle_message_link)

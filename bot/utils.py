@@ -46,9 +46,14 @@ def get_file_metadata(message: Message) -> Optional[Dict]:
             }
             
         elif message.photo:
-            # Get the largest photo size (message.photo is a list of PhotoSize objects)
-            photo_sizes = list(message.photo) if hasattr(message.photo, '__iter__') else [message.photo]
-            photo = max(photo_sizes, key=lambda x: getattr(x, 'file_size', 0) or 0)
+            # Get the largest photo size
+            try:
+                # Check if message.photo is iterable (list of PhotoSize objects)
+                photo_sizes = list(message.photo)
+                photo = max(photo_sizes, key=lambda x: getattr(x, 'file_size', 0) or 0)
+            except TypeError:
+                # If not iterable, it's a single PhotoSize object
+                photo = message.photo
             file_data = {
                 "file_id": photo.file_id,
                 "file_unique_id": photo.file_unique_id,
@@ -112,7 +117,7 @@ def extract_track_info(caption: str) -> Dict:
         logger.error(f"Error extracting track info: {e}")
         return {}
 
-def format_file_caption(message_or_doc) -> str:
+def format_file_caption(message_or_doc, include_track_id=False) -> str:
     """Format a detailed caption for file"""
     try:
         caption_parts = []
@@ -154,6 +159,11 @@ def format_file_caption(message_or_doc) -> str:
             chat_title = message_or_doc.get("chat_title", "Unknown Channel")
             date = message_or_doc.get("date")
         
+        # Track ID prominently at the top if requested (for backup channel)
+        if include_track_id and track_id:
+            caption_parts.append(f"🆔 **TRACK ID: {track_id}**")
+            caption_parts.append("━━━━━━━━━━━━━━━━━━━━")
+        
         caption_parts.append(f"🎵 **{file_name}**")
         caption_parts.append(f"📁 Type: {file_type}")
         
@@ -175,7 +185,7 @@ def format_file_caption(message_or_doc) -> str:
         # Track information
         if track_url:
             caption_parts.append(f"🔗 Track: {track_url}")
-        if track_id:
+        if track_id and not include_track_id:  # Don't repeat if already shown at top
             caption_parts.append(f"🆔 ID: {track_id}")
         
         # Source information  

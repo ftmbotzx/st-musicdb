@@ -224,10 +224,30 @@ class DatabaseManager:
             if not self.backup_channel_id:
                 return None
             # Return the channel ID as-is since Pyrogram range is now adjusted
-            return int(self.backup_channel_id)
+            channel_id = int(self.backup_channel_id)
+            return channel_id
         except (ValueError, TypeError):
             logger.error(f"Invalid backup channel ID format: {self.backup_channel_id}")
             return None
+    
+    def get_all_files(self, limit: int = None) -> List[Dict]:
+        """Get all files from database for export"""
+        try:
+            if self.collection is None:
+                logger.warning("Database not connected")
+                return []
+                
+            query = {"is_deleted": False}
+            cursor = self.collection.find(query).sort("date", -1)
+            
+            if limit:
+                cursor = cursor.limit(limit)
+                
+            return list(cursor)
+            
+        except Exception as e:
+            logger.error(f"Error getting all files: {e}")
+            return []
     
     def close_connection(self):
         """Close MongoDB connection"""
