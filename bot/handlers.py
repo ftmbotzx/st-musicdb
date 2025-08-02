@@ -53,6 +53,16 @@ async def handle_media_message(client: Client, message: Message):
         # Extract track information from ALL text sources including entities
         message_text = message.text or message.caption or ""
         
+        # CRITICAL: Check for \u2063 characters in the original message
+        if '\u2063' in message_text:
+            logger.info(f"FOUND \\u2063 in message: {repr(message_text)}")
+            # Log each character for analysis
+            for i, char in enumerate(message_text):
+                if char == '\u2063':
+                    logger.info(f"\\u2063 found at position {i}")
+                elif ord(char) > 127:
+                    logger.info(f"Special char at {i}: {repr(char)} (code: {ord(char)})")
+        
         # Also check for URLs in message entities (clickable links) and CAPTION entities
         entity_urls = []
         
