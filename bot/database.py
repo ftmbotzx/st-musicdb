@@ -45,7 +45,7 @@ class DatabaseManager:
     def _create_indexes(self):
         """Create database indexes for efficient querying"""
         try:
-            if not self.collection:
+            if self.collection is None:
                 return
                 
             # Create indexes
@@ -67,7 +67,7 @@ class DatabaseManager:
     def insert_file(self, document: Dict) -> bool:
         """Insert a new file document into the database"""
         try:
-            if not self.collection:
+            if self.collection is None:
                 logger.warning("Database not connected, skipping file insertion")
                 return False
                 
@@ -84,7 +84,7 @@ class DatabaseManager:
     def find_file_by_name(self, filename: str) -> Optional[Dict]:
         """Find a file by its filename"""
         try:
-            if not self.collection:
+            if self.collection is None:
                 logger.warning("Database not connected")
                 return None
                 
@@ -111,6 +111,10 @@ class DatabaseManager:
     def find_file_by_track_id(self, track_id: str) -> Optional[Dict]:
         """Find a file by its track ID"""
         try:
+            if self.collection is None:
+                logger.warning("Database not connected")
+                return None
+                
             document = self.collection.find_one({
                 "track_id": track_id,
                 "is_deleted": False
@@ -125,6 +129,10 @@ class DatabaseManager:
     def find_files_by_chat(self, chat_id: int) -> List[Dict]:
         """Find all files from a specific chat"""
         try:
+            if self.collection is None:
+                logger.warning("Database not connected")
+                return []
+                
             cursor = self.collection.find({
                 "chat_id": chat_id,
                 "is_deleted": False
@@ -139,6 +147,10 @@ class DatabaseManager:
     def mark_file_deleted(self, file_id: str) -> bool:
         """Mark a file as deleted"""
         try:
+            if self.collection is None:
+                logger.warning("Database not connected")
+                return False
+                
             result = self.collection.update_one(
                 {"file_id": file_id},
                 {"$set": {"is_deleted": True}}
@@ -153,6 +165,17 @@ class DatabaseManager:
     def get_statistics(self) -> Dict:
         """Get database statistics"""
         try:
+            if self.collection is None:
+                logger.warning("Database not connected")
+                return {
+                    "total_files": 0,
+                    "audio_files": 0,
+                    "video_files": 0,
+                    "document_files": 0,
+                    "photo_files": 0,
+                    "files_with_tracks": 0
+                }
+                
             total_files = self.collection.count_documents({"is_deleted": False})
             audio_files = self.collection.count_documents({
                 "file_type": "audio",
