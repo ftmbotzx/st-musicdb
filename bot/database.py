@@ -223,14 +223,8 @@ class DatabaseManager:
         try:
             if not self.backup_channel_id:
                 return None
-            # Handle both regular channel IDs and supergroup IDs
-            channel_id = str(self.backup_channel_id).strip()
-            if channel_id.startswith('-100'):
-                return int(channel_id)
-            elif channel_id.startswith('-'):
-                return int(channel_id)
-            else:
-                return int(f"-100{channel_id}")
+            # Return the channel ID as-is since Pyrogram range is now adjusted
+            return int(self.backup_channel_id)
         except (ValueError, TypeError):
             logger.error(f"Invalid backup channel ID format: {self.backup_channel_id}")
             return None

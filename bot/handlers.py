@@ -351,116 +351,91 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
     global indexing_process
     
     try:
-        # First pass: count total media messages (estimate using a smaller sample)
-        media_count = 0
-        sample_count = 0
-        sample_limit = 100  # Check first 100 messages to estimate
+        # Set initial estimate since we can't access chat history directly
+        indexing_process["total"] = 100  # Conservative estimate
         
-        try:
-            history = client.get_chat_history(chat_id, offset_id=start_message_id + 1, limit=sample_limit)
-            async for msg in history:
-                if indexing_process["stop_requested"]:
-                    break
-                sample_count += 1
-                if msg.audio or msg.video or msg.document or msg.photo:
-                    media_count += 1
-        except Exception as e:
-            logger.error(f"Error getting chat history for counting: {e}")
-            # Fallback: assume we'll process whatever we can find
-            media_count = 1
-                
-        # Estimate total based on sample (or use actual count if small channel)
-        if sample_count < sample_limit:
-            # Small channel, we counted everything
-            indexing_process["total"] = media_count
-        else:
-            # Estimate total based on ratio in sample
-            if sample_count > 0:
-                ratio = media_count / sample_count
-                estimated_total = int(ratio * 1000)  # Estimate for larger channels
-                indexing_process["total"] = max(media_count, estimated_total)
-            else:
-                indexing_process["total"] = media_count
-        
-        if media_count == 0:
-            await status_msg.edit_text("ℹ️ No media files found to index.")
-            indexing_process["active"] = False
-            return
-            
-        # Update status with total count
-        total_estimate = indexing_process["total"]
         await status_msg.edit_text(f"""
 🚀 **Indexing Process Started**
 
 📂 **Channel:** {chat_title}
-📊 **Estimated Media Files:** {total_estimate}
-📈 **Progress:** 0/{total_estimate} (0%)
+🔍 **Starting from:** Message {start_message_id}
 
-⏳ Processing...
+⏳ Searching for media files...
         """)
         
-        # Second pass: process messages
+        # Process messages by iterating backwards from the starting message
         processed = 0
         errors = 0
+        current_msg_id = start_message_id
+        consecutive_failures = 0
+        max_failures = 10  # Stop after 10 consecutive failed message retrievals
         
-        try:
-            history = client.get_chat_history(chat_id, offset_id=start_message_id + 1, limit=10000)
-            async for msg in history:
-                if indexing_process["stop_requested"]:
-                    await status_msg.edit_text(f"""
-⚠️ **Indexing Stopped**
-
-📂 **Channel:** {chat_title}
-📊 **Processed:** {processed}
-❌ **Stopped by user**
-                    """)
-                    break
-                
-                if msg.audio or msg.video or msg.document or msg.photo:
-                    try:
-                        await handle_media_message(client, msg)
-                        processed += 1
-                        indexing_process["processed"] = processed
-                        
-                        # Update progress every 10 files or at the end
-                        total_estimate = indexing_process["total"]
-                        if processed % 10 == 0 or processed == total_estimate:
-                            progress_bar = create_progress_bar(processed, total_estimate)
-                            percentage = int((processed / total_estimate) * 100) if total_estimate > 0 else 100
-                            
-                            await status_msg.edit_text(f"""
+        while consecutive_failures < max_failures and not indexing_process["stop_requested"]:
+            try:
+                # Try to get the specific message
+                try:
+                    messages = await client.get_messages(chat_id, current_msg_id)
+                    consecutive_failures = 0  # Reset failure count on success
+                    
+                    # Handle both single message and list of messages
+                    msg_list = messages if isinstance(messages, list) else [messages]
+                    
+                    for msg in msg_list:
+                        if msg and (msg.audio or msg.video or msg.document or msg.photo):
+                            try:
+                                await handle_media_message(client, msg)
+                                processed += 1
+                                indexing_process["processed"] = processed
+                                
+                                # Update progress every 5 files
+                                if processed % 5 == 0:
+                                    await status_msg.edit_text(f"""
 🚀 **Indexing In Progress**
 
 📂 **Channel:** {chat_title}
-📊 **Progress:** {processed}/{total_estimate} ({percentage}%)
-
-{progress_bar}
+📊 **Media Files Found:** {processed}
+🔍 **Current Message:** {current_msg_id}
 
 ⏳ Processing... 
-                            """)
+                                    """)
+                                    
+                            except Exception as e:
+                                logger.error(f"Error processing message {msg.id}: {e}")
+                                errors += 1
                             
-                    except Exception as e:
-                        logger.error(f"Error processing message {msg.id}: {e}")
-                        errors += 1
+                except Exception as e:
+                    # Message doesn't exist or can't be accessed
+                    consecutive_failures += 1
+                    if "MESSAGE_ID_INVALID" not in str(e):
+                        logger.debug(f"Could not get message {current_msg_id}: {e}")
+                
+                # Move to previous message
+                current_msg_id -= 1
+                
+                # Don't go below message ID 1
+                if current_msg_id < 1:
+                    break
                     
-        except Exception as e:
-            logger.error(f"Error during message iteration: {e}")
+            except Exception as e:
+                logger.error(f"Error in message iteration loop: {e}")
+                consecutive_failures += 1
+                current_msg_id -= 1
+                
+        # Final status
+        if indexing_process["stop_requested"]:
             await status_msg.edit_text(f"""
-❌ **Indexing Error**
+⚠️ **Indexing Stopped**
 
 📂 **Channel:** {chat_title}
-📊 **Processed:** {processed}
-❌ **Error:** Failed to access chat history
+📊 **Processed:** {processed} media files
+❌ **Stopped by user**
             """)
-            return
-                    
-        # Final status
-        if not indexing_process["stop_requested"]:
+        else:
             await status_msg.edit_text(f"""
 ✅ **Indexing Complete!**
 
 📂 **Channel:** {chat_title}
-📊 **Total Processed:** {processed}
+📊 **Total Processed:** {processed} media files
 ❌ **Errors:** {errors}
 ✨ **Status:** All accessible media files indexed successfully!
 
@@ -469,11 +444,12 @@ Use `/send <filename>` or `/sendid <track_id>` to retrieve files.
             
     except Exception as e:
         logger.error(f"Error during indexing: {e}")
+        processed = indexing_process.get("processed", 0)
         await status_msg.edit_text(f"""
 ❌ **Indexing Failed**
 
 📂 **Channel:** {chat_title}
-📊 **Processed:** {indexing_process.get('processed', 0)}/{indexing_process.get('total', 0)}
+📊 **Processed:** {processed} media files
 ❌ **Error:** {str(e)}
         """)
     finally:

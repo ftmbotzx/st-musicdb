@@ -1,8 +1,13 @@
 import os
 import logging
 from pyrogram import Client
+import pyrogram.utils as pyroutils
 from bot.handlers import setup_handlers
 from dotenv import load_dotenv
+
+# Adjust Pyrogram chat ID ranges
+pyroutils.MIN_CHAT_ID = -999999999999
+pyroutils.MIN_CHANNEL_ID = -100999999999999
 
 # Load environment variables
 load_dotenv()
