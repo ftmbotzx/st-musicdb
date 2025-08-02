@@ -73,29 +73,60 @@ async def handle_media_message(client: Client, message: Message):
         logger.error(f"Error handling media message: {e}")
 
 async def forward_to_backup(client: Client, message: Message):
-    """Forward message to backup channel and return backup file_id"""
+    """Forward message to backup channel with proper caption and return backup file_id"""
     try:
         backup_channel_id = db.get_backup_channel_id()
         if not backup_channel_id:
             logger.warning("No backup channel configured")
             return None
             
-        # Forward the message to backup channel
-        forwarded = await client.forward_messages(
-            chat_id=backup_channel_id,
-            from_chat_id=message.chat.id,
-            message_ids=message.id
-        )
+        # Extract track info for caption
+        track_info = extract_track_info(message.text or message.caption or "")
         
-        if forwarded:
-            # Get the file_id from the forwarded message
-            # forwarded is a list, get the first message
-            forwarded_msg = forwarded[0] if isinstance(forwarded, list) else forwarded
+        # Create detailed caption
+        backup_caption = format_file_caption(message, track_info)
+        
+        # Send file to backup channel with proper caption based on file type
+        forwarded_msg = None
+        
+        if message.audio:
+            forwarded_msg = await client.send_audio(
+                chat_id=backup_channel_id,
+                audio=message.audio.file_id,
+                caption=backup_caption,
+                duration=message.audio.duration,
+                performer=message.audio.performer,
+                title=message.audio.title
+            )
+        elif message.video:
+            forwarded_msg = await client.send_video(
+                chat_id=backup_channel_id,
+                video=message.video.file_id,
+                caption=backup_caption,
+                duration=message.video.duration,
+                width=message.video.width,
+                height=message.video.height
+            )
+        elif message.document:
+            forwarded_msg = await client.send_document(
+                chat_id=backup_channel_id,
+                document=message.document.file_id,
+                caption=backup_caption,
+                file_name=message.document.file_name
+            )
+        elif message.photo:
+            forwarded_msg = await client.send_photo(
+                chat_id=backup_channel_id,
+                photo=message.photo.file_id,
+                caption=backup_caption
+            )
+        
+        if forwarded_msg:
             backup_file_data = get_file_metadata(forwarded_msg)
             return backup_file_data["file_id"] if backup_file_data else None
             
     except Exception as e:
-        logger.error(f"Error forwarding to backup channel: {e}")
+        logger.error(f"Error sending to backup channel: {e}")
         return None
 
 async def handle_send_command(client: Client, message: Message):
@@ -387,15 +418,21 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
                                 processed += 1
                                 indexing_process["processed"] = processed
                                 
-                                # Update progress every 5 files
-                                if processed % 5 == 0:
+                                # Update progress every 10 files
+                                if processed % 10 == 0:
+                                    # Dynamic progress bar based on processed files
+                                    progress_steps = min(processed, 100)  # Cap at 100 for display
+                                    progress_bar = create_progress_bar(progress_steps, 100)
+                                    
                                     await status_msg.edit_text(f"""
 🚀 **Indexing In Progress**
 
 📂 **Channel:** {chat_title}
 📊 **Media Files Found:** {processed}
-🔍 **Current Message:** {current_msg_id}
 
+{progress_bar}
+
+🔍 **Current Message:** {current_msg_id}
 ⏳ Processing... 
                                     """)
                                     
@@ -431,11 +468,16 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
 ❌ **Stopped by user**
             """)
         else:
+            final_progress_bar = create_progress_bar(100, 100)  # Full progress bar
             await status_msg.edit_text(f"""
 ✅ **Indexing Complete!**
 
 📂 **Channel:** {chat_title}
 📊 **Total Processed:** {processed} media files
+📈 **Progress:** 100%
+
+{final_progress_bar}
+
 ❌ **Errors:** {errors}
 ✨ **Status:** All accessible media files indexed successfully!
 
