@@ -48,11 +48,14 @@ def get_file_metadata(message: Message) -> Optional[Dict]:
         elif message.photo:
             # Get the largest photo size
             try:
-                # Check if message.photo is iterable (list of PhotoSize objects)
-                photo_sizes = list(message.photo)
-                photo = max(photo_sizes, key=lambda x: getattr(x, 'file_size', 0) or 0)
-            except TypeError:
-                # If not iterable, it's a single PhotoSize object
+                # message.photo is typically a list of PhotoSize objects
+                if isinstance(message.photo, list):
+                    photo = max(message.photo, key=lambda x: getattr(x, 'file_size', 0) or 0)
+                else:
+                    # If it's a single PhotoSize object
+                    photo = message.photo
+            except (TypeError, AttributeError):
+                # Fallback: use the photo object directly
                 photo = message.photo
             file_data = {
                 "file_id": photo.file_id,
@@ -93,19 +96,27 @@ def extract_track_info(caption: str) -> Dict:
         # Try multiple extraction approaches without losing URLs
         urls = []
         
-        # Strategy 1: Aggressive cleaning of ALL invisible and problematic characters
-        # The issue is that \xad and \u2063 are breaking the URLs
+        # Strategy 1: Prioritize \u2063 (invisible separator) for proper link extraction
+        # This is the preferred character for handling URL separators
         comprehensive_clean = caption
-        problematic_chars = [
-            '\u2063',          # Invisible separator (primary issue)
-            '\u00ad',          # Soft hyphen
+        
+        # Primary character handling - prioritize \u2063 (invisible separator)
+        primary_separator = '\u2063'  # Invisible separator - main target for proper link extraction
+        
+        # Secondary problematic characters to clean
+        secondary_chars = [
+            '\u00ad',          # Soft hyphen (legacy approach)
             '\u200b', '\u200c', '\u200d',  # Zero-width spaces
             '\ufeff',          # BOM
             '\u00a0',          # Non-breaking space
             '\u180e',          # Mongolian vowel separator
         ]
         
-        for char in problematic_chars:
+        # First handle the primary separator for proper link extraction
+        comprehensive_clean = comprehensive_clean.replace(primary_separator, '')
+        
+        # Then handle secondary problematic characters
+        for char in secondary_chars:
             comprehensive_clean = comprehensive_clean.replace(char, '')
         
         # Also remove extra spaces that might break URLs
