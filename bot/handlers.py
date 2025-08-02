@@ -456,6 +456,7 @@ This bot automatically indexes media files and provides retrieval functionality 
 • `/stats` - Show database statistics
 • `/db` - Export database as PDF (key fields)
 • `/db excel` - Export database as Excel with ALL 30+ metadata fields
+• `/db csv` - Export database as CSV with ALL 30+ metadata fields
 • `/cancel` - Stop current indexing process
 
 **To start indexing:**
@@ -632,18 +633,28 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
 ⏳ Searching for media files...
         """)
         
-        # Initialize tracking variables
-        total_messages = start_message_id  # Total messages in channel  
+        # Initialize tracking variables - Index from message 1 to start_message_id
+        total_messages = start_message_id  # Total messages to process
         fetched_messages = 0
         processed = 0
         errors = 0
-        current_msg_id = start_message_id
+        current_msg_id = 1  # Start from message ID 1
         consecutive_failures = 0
         max_failures = 50  # Allow more failures before stopping
         max_processed = 1000  # Process up to 1000 messages
         last_update_time = time.time()  # Track last progress update time
         
-        while consecutive_failures < max_failures and processed < max_processed and not indexing_process["stop_requested"]:
+        await status_msg.edit_text(f"""
+🚀 **Indexing Process Started**
+
+📂 **Channel:** {chat_title}
+🔍 **Indexing from:** Message 1 to Message {start_message_id}
+📊 **Total messages to check:** {start_message_id}
+
+⏳ Searching for media files...
+        """)
+        
+        while consecutive_failures < max_failures and processed < max_processed and current_msg_id <= start_message_id and not indexing_process["stop_requested"]:
             try:
                 # Try to get the specific message
                 try:
@@ -666,8 +677,8 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
                                 time_since_update = current_time - last_update_time
                                 if time_since_update >= 120 or processed % 20 == 0:  # 120 seconds = 2 minutes
                                     last_update_time = current_time
-                                    # Calculate progress percentage based on current position
-                                    progress_percentage = min(100, int((fetched_messages / max(start_message_id, 100)) * 100))
+                                    # Calculate progress percentage based on current position (1 to start_message_id)
+                                    progress_percentage = min(100, int((current_msg_id / start_message_id) * 100))
                                     
                                     # Create fancy status with proper progress bar
                                     fancy_status = create_fancy_progress_status(
@@ -693,17 +704,13 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
                     if "MESSAGE_ID_INVALID" not in str(e):
                         logger.debug(f"Could not get message {current_msg_id}: {e}")
                 
-                # Move to previous message
-                current_msg_id -= 1
-                
-                # Don't go below message ID 1
-                if current_msg_id < 1:
-                    break
+                # Move to next message (going forward from 1 to start_message_id)
+                current_msg_id += 1
                     
             except Exception as e:
                 logger.error(f"Error in message iteration loop: {e}")
                 consecutive_failures += 1
-                current_msg_id -= 1
+                current_msg_id += 1
                 
         # Final status
         if indexing_process["stop_requested"]:
@@ -817,11 +824,16 @@ async def handle_db_command(client: Client, message: Message):
         
         if len(command_parts) > 1:
             export_format = command_parts[1].lower()
-            if export_format not in ["pdf", "excel", "xlsx"]:
-                await message.reply("📊 Usage: /db [pdf|excel|xlsx]\nDefault: pdf")
+            if export_format not in ["pdf", "excel", "xlsx", "csv"]:
+                await message.reply("📊 Usage: /db [pdf|excel|xlsx|csv]\nDefault: pdf")
                 return
         
-        format_name = "Excel" if export_format in ["excel", "xlsx"] else "PDF"
+        if export_format in ["excel", "xlsx"]:
+            format_name = "Excel"
+        elif export_format == "csv":
+            format_name = "CSV"
+        else:
+            format_name = "PDF"
         await message.reply(f"📊 Generating database export as {format_name} with ALL metadata fields... This may take a few moments.")
         
         # Get all files from database
@@ -861,6 +873,9 @@ async def handle_db_command(client: Client, message: Message):
         if export_format in ["excel", "xlsx"]:
             # Generate Excel with ALL metadata fields
             await generate_excel_export(client, message, files)
+        elif export_format == "csv":
+            # Generate CSV with ALL metadata fields
+            await generate_csv_export(client, message, files)
         else:
             # Generate PDF with ALL metadata fields  
             await generate_pdf_export(client, message, files)
@@ -1133,98 +1148,143 @@ async def generate_pdf_export(client: Client, message: Message, files):
     except Exception as e:
         logger.error(f"Error generating PDF export: {e}")
         await message.reply(f"❌ Failed to generate PDF export: {str(e)}")
+
+async def generate_csv_export(client: Client, message: Message, files):
+    """Generate comprehensive CSV export with ALL 30+ metadata fields"""
+    try:
+        import csv
+        from datetime import datetime
+        import tempfile
+        import os
         
-        # Container for PDF elements
-        story = []
-        
-        # Styles
-        styles = getSampleStyleSheet()
-        title_style = ParagraphStyle(
-            'CustomTitle',
-            parent=styles['Heading1'],
-            fontSize=20,
-            spaceAfter=30,
-            alignment=1  # Center
-        )
-        
-        # Title
-        title = Paragraph("📊 Media Indexer Database Export", title_style)
-        story.append(title)
-        
-        # Statistics
-        stats = db.get_statistics()
-        stats_text = f"""
-        <b>Database Statistics:</b><br/>
-        • Total Files: {stats['total_files']}<br/>
-        • Audio Files: {stats['audio_files']}<br/>
-        • Video Files: {stats['video_files']}<br/>
-        • Document Files: {stats['document_files']}<br/>
-        • Photo Files: {stats['photo_files']}<br/>
-        • Files with Track URLs: {stats['files_with_tracks']}<br/>
-        • Export Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-        """
-        stats_para = Paragraph(stats_text, styles['Normal'])
-        story.append(stats_para)
-        story.append(Spacer(1, 20))
-        
-        # Prepare table data
-        data = [['#', 'File Name', 'Type', 'Size (MB)', 'Duration', 'Track ID', 'Source', 'Date']]
-        
-        for i, file_doc in enumerate(files[:1000], 1):  # Limit to 1000 files for PDF
-            if not file_doc:  # Skip None documents
-                continue
-                
-            file_name = str(file_doc.get('file_name', 'Unknown'))[:30]  # Truncate long names
-            file_type = str(file_doc.get('file_type', 'Unknown'))
-            file_size = file_doc.get('file_size', 0) or 0
-            size_mb = f"{round(file_size / (1024 * 1024), 2):.2f}" if file_size else "0"
-            duration = file_doc.get('duration', 0) or 0
-            duration_str = f"{duration//60:02d}:{duration%60:02d}" if duration else "N/A"
-            track_id = str(file_doc.get('track_id', 'N/A'))[:20]  # Truncate long IDs
-            source = str(file_doc.get('chat_title', 'Unknown'))[:20]
-            date_str = str(file_doc.get('date', ''))
-            date = date_str[:10] if date_str else "N/A"  # Just date part
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.csv', mode='w', newline='', encoding='utf-8') as tmp_file:
+            csv_path = tmp_file.name
+            writer = csv.writer(tmp_file)
             
-            data.append([
-                str(i), file_name, file_type, size_mb, 
-                duration_str, track_id, source, date
-            ])
+            # ALL metadata fields (30+ fields)
+            headers = [
+                'Row_Number', 'File_ID', 'Backup_File_ID', 'File_Unique_ID', 'File_Name', 'Caption', 
+                'File_Type', 'MIME_Type', 'File_Size_MB', 'Duration_Sec', 'Width', 'Height',
+                'Chat_ID', 'Chat_Title', 'Message_ID', 'Sender_ID', 'Sender_Username', 
+                'Sender_First_Name', 'Sender_Last_Name', 'Date', 'Is_Deleted',
+                'Track_URL', 'Track_ID', 'Platform', 'Performer', 'Title', 'Thumbnail',
+                'Original_Caption', 'Entity_URLs', 'Processing_Status'
+            ]
+            
+            # Write headers
+            writer.writerow(headers)
+            
+            # Write data rows
+            for row_idx, file_doc in enumerate(files, 1):
+                if not file_doc:
+                    continue
+                    
+                # Extract all fields with safe defaults
+                file_size = file_doc.get('file_size', 0) or 0
+                size_mb = round(file_size / (1024 * 1024), 2) if file_size else 0
+                
+                row_data = [
+                    row_idx,  # Row number
+                    file_doc.get('file_id', ''),
+                    file_doc.get('backup_file_id', ''),
+                    file_doc.get('file_unique_id', ''),
+                    file_doc.get('file_name', ''),
+                    file_doc.get('caption', ''),
+                    file_doc.get('file_type', ''),
+                    file_doc.get('mime_type', ''),
+                    size_mb,
+                    file_doc.get('duration', 0) or 0,
+                    file_doc.get('width', 0) or 0,
+                    file_doc.get('height', 0) or 0,
+                    file_doc.get('chat_id', ''),
+                    file_doc.get('chat_title', ''),
+                    file_doc.get('message_id', ''),
+                    file_doc.get('sender_id', ''),
+                    file_doc.get('sender_username', ''),
+                    file_doc.get('sender_first_name', ''),
+                    file_doc.get('sender_last_name', ''),
+                    file_doc.get('date', ''),
+                    file_doc.get('is_deleted', False),
+                    file_doc.get('track_url', ''),
+                    file_doc.get('track_id', ''),
+                    file_doc.get('platform', ''),
+                    file_doc.get('performer', ''),
+                    file_doc.get('title', ''),
+                    file_doc.get('thumbnail', ''),
+                    file_doc.get('original_caption', ''),
+                    str(file_doc.get('entity_urls', [])),
+                    'Processed' if file_doc.get('track_id') else 'No Track'
+                ]
+                
+                writer.writerow(row_data)
         
-        # Create table
-        table = Table(data)
-        table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 8),
-            ('FONTSIZE', (0, 1), (-1, -1), 6),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black)
-        ]))
+        # Get statistics
+        stats = db.get_statistics()
         
-        story.append(table)
-        
-        # Build PDF
-        doc.build(story)
-        
-        # Send PDF file
+        # Send CSV file
         await client.send_document(
             chat_id=message.chat.id,
-            document=pdf_path,
-            file_name=f"database_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-            caption=f"📊 Database Export\n\n📁 Total Files: {len(files)}\n📅 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            document=csv_path,
+            caption=f"📊 **Complete Database Export (CSV)**\n\n"
+                   f"📁 **{stats['total_files']} files** with **ALL {len(headers)} metadata fields**\n"
+                   f"🎵 **{stats['files_with_tracks']} files** have track information\n"
+                   f"📅 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                   f"**Perfect for:** Data analysis, spreadsheet import, automated processing\n"
+                   f"**To retrieve this file:** Use `/sendid` with the track ID or `/send` with filename"
         )
         
-        # Clean up temporary file
-        os.unlink(pdf_path)
+        # Store CSV file in database for retrieval
+        try:
+            # Read the file and store it in database with a unique identifier
+            csv_filename = f"database_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            
+            # Send to backup channel and get file ID
+            backup_msg = await client.send_document(
+                chat_id=os.getenv('BACKUP_CHANNEL_ID'),
+                document=csv_path,
+                caption=f"📊 Database Export CSV - {csv_filename}\n"
+                       f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                       f"Files: {stats['total_files']} | Fields: {len(headers)}"
+            )
+            
+            # Store in database for easy retrieval
+            export_doc = {
+                'file_id': backup_msg.document.file_id,
+                'backup_file_id': backup_msg.document.file_id,
+                'file_unique_id': backup_msg.document.file_unique_id,
+                'file_name': csv_filename,
+                'file_type': 'document',
+                'mime_type': 'text/csv',
+                'file_size': backup_msg.document.file_size,
+                'chat_id': message.chat.id,
+                'chat_title': 'Database Export',
+                'message_id': backup_msg.id,
+                'sender_id': message.from_user.id if message.from_user else None,
+                'date': datetime.now().isoformat(),
+                'caption': f"Database export with {stats['total_files']} files",
+                'track_id': f"export_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                'platform': 'database_export',
+                'is_deleted': False
+            }
+            
+            db.insert_file(export_doc)
+            
+            await message.reply(f"✅ CSV export completed!\n\n"
+                              f"**To retrieve this file later:**\n"
+                              f"• Use: `/send {csv_filename}`\n"
+                              f"• Or: `/sendid export_{datetime.now().strftime('%Y%m%d_%H%M%S')}`")
+            
+        except Exception as store_error:
+            logger.warning(f"Could not store CSV in database: {store_error}")
+            await message.reply("✅ CSV export completed with ALL metadata fields!")
         
-        await message.reply("✅ Database export completed successfully!")
+        # Clean up
+        os.unlink(csv_path)
         
     except Exception as e:
-        logger.error(f"Error generating database export: {e}")
-        await message.reply(f"❌ Failed to generate database export: {str(e)}")
+        logger.error(f"Error generating CSV export: {e}")
+        await message.reply(f"❌ Failed to generate CSV export: {str(e)}")
 
 async def handle_forwarded_message(client: Client, message: Message):
     """Handle forwarded messages to automatically start indexing"""
