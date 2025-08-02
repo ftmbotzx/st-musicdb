@@ -204,14 +204,12 @@ This bot automatically indexes media files and provides retrieval functionality.
 • `/send <filename>` - Retrieve file by filename
 • `/sendid <track_id>` - Retrieve file by track ID
 • `/stats` - Show database statistics
-• `/index <channel_link>` - Start indexing from a channel or message link
-• `/stop_index` - Stop current indexing process
 
 **To start indexing:**
 1. For private channels: Add this bot as admin to the channel
 2. For public channels: No admin access needed
-3. Send `/index` with channel link or forward any message from the channel
-4. Bot will start indexing from that message and show progress
+3. Send any message link (t.me/channel/123) or forward any message from the channel
+4. Bot will automatically start indexing from that message and show progress
 
 The bot automatically indexes all media files (audio, video, documents, photos) with their metadata and track information.
     """
@@ -239,95 +237,61 @@ async def handle_stats_command(client: Client, message: Message):
         logger.error(f"Error getting statistics: {e}")
         await message.reply("Failed to retrieve statistics.")
 
-async def handle_index_command(client: Client, message: Message):
-    """Handle /index command to start indexing from a channel or message"""
+async def handle_message_link(client: Client, message: Message):
+    """Handle message links to start indexing"""
     global indexing_process
     
     if indexing_process["active"]:
-        await message.reply("⚠️ Indexing is already in progress. Use /stop_index to stop it first.")
+        await message.reply("⚠️ Indexing is already in progress.")
         return
     
     try:
-        # Extract channel/message info from command or forwarded message
-        if message.forward_from_chat:
-            # Handle forwarded message
-            chat_id = message.forward_from_chat.id
-            start_message_id = message.forward_from_message_id
-            chat_title = message.forward_from_chat.title or message.forward_from_chat.username
+        text = message.text or message.caption or ""
+        
+        # Extract message link
+        link_pattern = r"https://t\.me/([^/]+)/(\d+)"
+        match = re.search(link_pattern, text)
+        
+        if match:
+            channel_username = match.group(1)
+            message_id = int(match.group(2))
             
-            await start_indexing_process(client, message, chat_id, start_message_id, chat_title)
-            
-        else:
-            # Handle command with link
-            command_parts = message.text.split(" ", 1)
-            if len(command_parts) < 2:
-                await message.reply("""
-**Usage:**
-• `/index <channel_link>` - Start indexing from channel
-• Forward any message from the channel and use `/index`
-
-**Examples:**
-• `/index https://t.me/channel_name`
-• `/index @channel_username`
-• Forward a message and type `/index`
-                """)
-                return
-            
-            link = command_parts[1].strip()
-            await handle_channel_link(client, message, link)
-            
-    except Exception as e:
-        logger.error(f"Error in index command: {e}")
-        await message.reply("❌ Error starting indexing process.")
-
-async def handle_channel_link(client: Client, message: Message, link: str):
-    """Handle channel link and start indexing"""
-    try:
-        # Extract channel username from link
-        if "t.me/" in link:
-            username = link.split("t.me/")[-1].split("/")[0]
-        elif link.startswith("@"):
-            username = link[1:]
-        else:
-            username = link
-            
-        # Try to get chat info
-        try:
-            chat = await client.get_chat(username)
-            chat_id = chat.id
-            chat_title = chat.title or chat.username
-            
-            # Start from latest message
-            await start_indexing_process(client, message, chat_id, None, chat_title)
-            
-        except ChannelPrivate:
-            await message.reply(f"""
+            # Try to get chat info
+            try:
+                chat = await client.get_chat(channel_username)
+                chat_id = chat.id
+                chat_title = chat.title or chat.username
+                
+                await start_indexing_process(client, message, chat_id, message_id, chat_title)
+                
+            except ChannelPrivate:
+                await message.reply(f"""
 ❌ **Channel is Private**
 
-To index `{username}`:
-1. Add this bot as **admin** to the channel
+To index this channel:
+1. Add this bot as **admin** to @{channel_username}
 2. Give it permission to read messages
-3. Try the command again
-
-Or forward any message from the channel and use `/index`
-            """)
-            
-        except ChatAdminRequired:
-            await message.reply(f"""
+3. Send the message link again
+                """)
+                
+            except ChatAdminRequired:
+                await message.reply(f"""
 ❌ **Admin Rights Required**
 
-To index `{username}`:
-1. Add this bot as **admin** to the channel
+To index this channel:
+1. Add this bot as **admin** to @{channel_username}
 2. Give it permission to read messages
-3. Try the command again
-            """)
-            
-        except UsernameNotOccupied:
-            await message.reply(f"❌ Channel `{username}` not found. Please check the username.")
-            
+3. Send the message link again
+                """)
+                
+            except UsernameNotOccupied:
+                await message.reply(f"❌ Channel @{channel_username} not found.")
+                
     except Exception as e:
-        logger.error(f"Error handling channel link: {e}")
-        await message.reply("❌ Error processing channel link.")
+        logger.error(f"Error handling message link: {e}")
+        await message.reply("❌ Error processing message link.")
+
+
 
 async def start_indexing_process(client: Client, message: Message, chat_id: int, start_message_id: int = None, chat_title: str = "Unknown"):
     """Start the indexing process for a channel"""
@@ -502,35 +466,36 @@ async def handle_stop_index_command(client: Client, message: Message):
     await message.reply("⚠️ Stopping indexing process...")
 
 async def handle_forwarded_message(client: Client, message: Message):
-    """Handle forwarded messages for indexing"""
+    """Handle forwarded messages to automatically start indexing"""
+    global indexing_process
+    
     if message.forward_from_chat and not indexing_process["active"]:
+        chat_id = message.forward_from_chat.id
+        start_message_id = message.forward_from_message_id
         chat_title = message.forward_from_chat.title or message.forward_from_chat.username
-        await message.reply(f"""
-📨 **Forwarded Message Detected**
-
-From: **{chat_title}**
-
-To start indexing from this message, use: `/index`
-        """)
+        
+        await start_indexing_process(client, message, chat_id, start_message_id, chat_title)
 
 def setup_handlers(app: Client):
     """Setup all message handlers"""
     
-    # Media message handlers
-    app.on_message(filters.audio & ~filters.bot)(handle_media_message)
-    app.on_message(filters.video & ~filters.bot)(handle_media_message)
-    app.on_message(filters.document & ~filters.bot)(handle_media_message)
-    app.on_message(filters.photo & ~filters.bot)(handle_media_message)
+    # Media message handlers (only for direct media, not for indexing)
+    app.on_message(filters.audio & ~filters.bot & ~filters.forwarded & filters.private)(handle_media_message)
+    app.on_message(filters.video & ~filters.bot & ~filters.forwarded & filters.private)(handle_media_message)
+    app.on_message(filters.document & ~filters.bot & ~filters.forwarded & filters.private)(handle_media_message)
+    app.on_message(filters.photo & ~filters.bot & ~filters.forwarded & filters.private)(handle_media_message)
     
     # Command handlers
     app.on_message(filters.command("start"))(handle_start_command)
     app.on_message(filters.command("send"))(handle_send_command)
     app.on_message(filters.command("sendid"))(handle_sendid_command)
     app.on_message(filters.command("stats"))(handle_stats_command)
-    app.on_message(filters.command("index"))(handle_index_command)
     app.on_message(filters.command("stop_index"))(handle_stop_index_command)
     
-    # Forwarded message handler
+    # Message link handler
+    app.on_message(filters.text & filters.regex(r"https://t\.me/[^/]+/\d+") & ~filters.bot)(handle_message_link)
+    
+    # Forwarded message handler for automatic indexing
     app.on_message(filters.forwarded & ~filters.bot)(handle_forwarded_message)
     
     logger.info("All handlers registered successfully")
