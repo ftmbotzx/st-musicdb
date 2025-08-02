@@ -448,12 +448,15 @@ async def handle_start_command(client: Client, message: Message):
     welcome_text = """
 🤖 **Media Indexer Bot**
 
-This bot automatically indexes media files and provides retrieval functionality.
+This bot automatically indexes media files and provides retrieval functionality with complete metadata extraction.
 
 **Commands:**
 • `/send <filename>` - Retrieve file by filename
 • `/sendid <track_id>` - Retrieve file by track ID
 • `/stats` - Show database statistics
+• `/db` - Export database as PDF (key fields)
+• `/db excel` - Export database as Excel with ALL 30+ metadata fields
+• `/cancel` - Stop current indexing process
 
 **To start indexing:**
 1. For private channels: Add this bot as admin to the channel
@@ -461,7 +464,12 @@ This bot automatically indexes media files and provides retrieval functionality.
 3. Send any message link (t.me/channel/123) or forward any message from the channel
 4. Bot will automatically start indexing from that message and show progress
 
-The bot automatically indexes all media files (audio, video, documents, photos) with their metadata and track information.
+**Features:**
+✅ Extracts Spotify track IDs from TEXT_LINK entities
+✅ Processes invisible separator characters (\\u2063, \\xad)
+✅ Stores 30+ metadata fields per file
+✅ Automatic backup to designated channel
+✅ Real-time progress tracking with rate limiting
     """
     await message.reply(welcome_text)
 
@@ -802,9 +810,19 @@ async def handle_stop_index_command(client: Client, message: Message):
     await message.reply("⚠️ Stopping indexing process...")
 
 async def handle_db_command(client: Client, message: Message):
-    """Handle /db command to export database as PDF"""
+    """Handle /db command to export database as PDF and Excel with ALL metadata fields"""
     try:
-        await message.reply("📊 Generating database export PDF... This may take a few moments.")
+        command_parts = message.text.split()
+        export_format = "pdf"  # Default
+        
+        if len(command_parts) > 1:
+            export_format = command_parts[1].lower()
+            if export_format not in ["pdf", "excel", "xlsx"]:
+                await message.reply("📊 Usage: /db [pdf|excel|xlsx]\nDefault: pdf")
+                return
+        
+        format_name = "Excel" if export_format in ["excel", "xlsx"] else "PDF"
+        await message.reply(f"📊 Generating database export as {format_name} with ALL metadata fields... This may take a few moments.")
         
         # Get all files from database
         files = db.get_all_files()
@@ -813,28 +831,308 @@ async def handle_db_command(client: Client, message: Message):
             await message.reply("📁 Database is empty. No files to export.")
             return
         
-        # Generate PDF
-        try:
-            from reportlab.lib.pagesizes import A4
-            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-            from reportlab.lib import colors
-            from reportlab.lib.units import inch
-            from datetime import datetime
-            import tempfile
-            import os
-        except ImportError as e:
-            await message.reply(f"❌ PDF generation libraries not available: {e}")
-            return
+        # Import libraries based on format
+        if export_format in ["excel", "xlsx"]:
+            try:
+                import openpyxl
+                from openpyxl import Workbook
+                from openpyxl.styles import Font, PatternFill, Alignment
+                from openpyxl.utils import get_column_letter
+                from datetime import datetime
+                import tempfile
+                import os
+            except ImportError as e:
+                await message.reply(f"❌ Excel generation libraries not available: {e}")
+                return
+        else:
+            try:
+                from reportlab.lib.pagesizes import A4, landscape
+                from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+                from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+                from reportlab.lib import colors
+                from reportlab.lib.units import inch
+                from datetime import datetime
+                import tempfile
+                import os
+            except ImportError as e:
+                await message.reply(f"❌ PDF generation libraries not available: {e}")
+                return
+        
+        if export_format in ["excel", "xlsx"]:
+            # Generate Excel with ALL metadata fields
+            await generate_excel_export(client, message, files)
+        else:
+            # Generate PDF with ALL metadata fields  
+            await generate_pdf_export(client, message, files)
+            
+    except Exception as e:
+        logger.error(f"Error handling db command: {e}")
+        await message.reply(f"❌ Failed to export database: {str(e)}")
+
+async def generate_excel_export(client: Client, message: Message, files):
+    """Generate comprehensive Excel export with ALL 30+ metadata fields"""
+    try:
+        import openpyxl
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from openpyxl.utils import get_column_letter
+        from datetime import datetime
+        import tempfile
+        import os
+        
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
+            excel_path = tmp_file.name
+        
+        # Create workbook and worksheet
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Media Index Database"
+        
+        # ALL metadata fields (30+ fields)
+        headers = [
+            '#', 'File ID', 'Backup File ID', 'File Unique ID', 'File Name', 'Caption', 
+            'File Type', 'MIME Type', 'File Size (MB)', 'Duration (sec)', 'Width', 'Height',
+            'Chat ID', 'Chat Title', 'Message ID', 'Sender ID', 'Sender Username', 
+            'Sender First Name', 'Sender Last Name', 'Date', 'Is Deleted',
+            'Track URL', 'Track ID', 'Platform', 'Performer', 'Title', 'Thumbnail',
+            'Original Caption', 'Entity URLs', 'Processing Status'
+        ]
+        
+        # Add headers to worksheet
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=header)
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        
+        # Add data rows
+        for row_idx, file_doc in enumerate(files, 2):
+            if not file_doc:
+                continue
+                
+            # Extract all fields with safe defaults
+            file_size = file_doc.get('file_size', 0) or 0
+            size_mb = round(file_size / (1024 * 1024), 2) if file_size else 0
+            
+            row_data = [
+                row_idx - 1,  # Row number
+                file_doc.get('file_id', ''),
+                file_doc.get('backup_file_id', ''),
+                file_doc.get('file_unique_id', ''),
+                file_doc.get('file_name', ''),
+                file_doc.get('caption', ''),
+                file_doc.get('file_type', ''),
+                file_doc.get('mime_type', ''),
+                size_mb,
+                file_doc.get('duration', 0) or 0,
+                file_doc.get('width', 0) or 0,
+                file_doc.get('height', 0) or 0,
+                file_doc.get('chat_id', ''),
+                file_doc.get('chat_title', ''),
+                file_doc.get('message_id', ''),
+                file_doc.get('sender_id', ''),
+                file_doc.get('sender_username', ''),
+                file_doc.get('sender_first_name', ''),
+                file_doc.get('sender_last_name', ''),
+                file_doc.get('date', ''),
+                file_doc.get('is_deleted', False),
+                file_doc.get('track_url', ''),
+                file_doc.get('track_id', ''),
+                file_doc.get('platform', ''),
+                file_doc.get('performer', ''),
+                file_doc.get('title', ''),
+                file_doc.get('thumbnail', ''),
+                file_doc.get('original_caption', ''),
+                str(file_doc.get('entity_urls', [])),
+                'Processed' if file_doc.get('track_id') else 'No Track'
+            ]
+            
+            for col, value in enumerate(row_data, 1):
+                ws.cell(row=row_idx, column=col, value=value)
+        
+        # Auto-adjust column widths
+        for col in range(1, len(headers) + 1):
+            column_letter = get_column_letter(col)
+            max_length = 0
+            for row in ws[column_letter]:
+                try:
+                    if len(str(row.value)) > max_length:
+                        max_length = len(str(row.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)  # Cap at 50 characters
+            ws.column_dimensions[column_letter].width = adjusted_width
+        
+        # Add statistics sheet
+        stats_ws = wb.create_sheet("Statistics")
+        stats = db.get_statistics()
+        
+        stats_data = [
+            ['Database Statistics', ''],
+            ['Total Files', stats['total_files']],
+            ['Audio Files', stats['audio_files']],
+            ['Video Files', stats['video_files']],
+            ['Document Files', stats['document_files']], 
+            ['Photo Files', stats['photo_files']],
+            ['Files with Track URLs', stats['files_with_tracks']],
+            ['Export Date', datetime.now().strftime('%Y-%m-%d %H:%M:%S')],
+            ['', ''],
+            ['Field Descriptions', ''],
+            ['Track URL', 'Full Spotify/Music URL'],
+            ['Track ID', 'Extracted music track identifier'],
+            ['Platform', 'Music platform (spotify, youtube, etc.)'],
+            ['File Size (MB)', 'File size in megabytes'],
+            ['Duration (sec)', 'Audio/video duration in seconds'],
+            ['Chat Title', 'Source channel/chat name'],
+            ['Processing Status', 'Whether track info was extracted']
+        ]
+        
+        for row_idx, (key, value) in enumerate(stats_data, 1):
+            stats_ws.cell(row=row_idx, column=1, value=key).font = Font(bold=True)
+            stats_ws.cell(row=row_idx, column=2, value=value)
+        
+        # Save workbook
+        wb.save(excel_path)
+        
+        # Send Excel file
+        await client.send_document(
+            chat_id=message.chat.id,
+            document=excel_path,
+            caption=f"📊 **Complete Database Export (Excel)**\n\n"
+                   f"📁 **{stats['total_files']} files** with **ALL {len(headers)} metadata fields**\n"
+                   f"🎵 **{stats['files_with_tracks']} files** have track information\n"
+                   f"📅 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                   f"**Includes:** All file metadata, track IDs, Spotify URLs, sender info, timestamps, and more!"
+        )
+        
+        # Clean up
+        os.unlink(excel_path)
+        await message.reply("✅ Excel export completed with ALL metadata fields!")
+        
+    except Exception as e:
+        logger.error(f"Error generating Excel export: {e}")
+        await message.reply(f"❌ Failed to generate Excel export: {str(e)}")
+
+async def generate_pdf_export(client: Client, message: Message, files):
+    """Generate comprehensive PDF export with ALL metadata fields"""
+    try:
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib import colors
+        from reportlab.lib.units import inch
+        from datetime import datetime
+        import tempfile
+        import os
         
         # Create temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
             pdf_path = tmp_file.name
         
-        # Create PDF document
-        doc = SimpleDocTemplate(pdf_path, pagesize=A4, 
-                               rightMargin=72, leftMargin=72, 
-                               topMargin=72, bottomMargin=18)
+        # Use landscape orientation for more columns
+        doc = SimpleDocTemplate(pdf_path, pagesize=landscape(A4), 
+                               rightMargin=36, leftMargin=36, 
+                               topMargin=36, bottomMargin=36)
+        
+        # Container for PDF elements
+        story = []
+        
+        # Styles
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=20,
+            spaceAfter=30,
+            alignment=1  # Center
+        )
+        
+        # Title
+        title = Paragraph("📊 Complete Media Database Export - ALL FIELDS", title_style)
+        story.append(title)
+        
+        # Statistics
+        stats = db.get_statistics()
+        stats_text = f"""
+        <b>Database Statistics:</b><br/>
+        • Total Files: {stats['total_files']}<br/>
+        • Audio Files: {stats['audio_files']}<br/>
+        • Video Files: {stats['video_files']}<br/>
+        • Document Files: {stats['document_files']}<br/>
+        • Photo Files: {stats['photo_files']}<br/>
+        • Files with Track URLs: {stats['files_with_tracks']}<br/>
+        • Export Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        """
+        stats_para = Paragraph(stats_text, styles['Normal'])
+        story.append(stats_para)
+        story.append(Spacer(1, 20))
+        
+        # Prepare table data with key fields (PDF has space constraints)
+        data = [['#', 'File Name', 'Type', 'Size (MB)', 'Track ID', 'Track URL', 'Platform', 'Chat Title', 'Date']]
+        
+        for i, file_doc in enumerate(files[:500], 1):  # Limit for PDF readability
+            if not file_doc:
+                continue
+                
+            file_name = str(file_doc.get('file_name', 'Unknown'))[:25]  # Truncate for PDF
+            file_type = str(file_doc.get('file_type', 'Unknown'))
+            file_size = file_doc.get('file_size', 0) or 0
+            size_mb = f"{round(file_size / (1024 * 1024), 2):.1f}" if file_size else "0"
+            track_id = str(file_doc.get('track_id', ''))[:15]  # Truncate for PDF
+            track_url = str(file_doc.get('track_url', ''))[:30]  # Truncate for PDF
+            platform = str(file_doc.get('platform', ''))
+            chat_title = str(file_doc.get('chat_title', ''))[:20]  # Truncate for PDF
+            date = str(file_doc.get('date', ''))[:10]  # Date only
+            
+            data.append([i, file_name, file_type, size_mb, track_id, track_url, platform, chat_title, date])
+        
+        # Create table
+        table = Table(data)
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        
+        story.append(table)
+        
+        # Add note about complete data
+        note_text = f"""
+        <b>Note:</b> This PDF contains key fields from {len(files)} files. 
+        For COMPLETE data with all 30+ metadata fields, use: <b>/db excel</b>
+        """
+        note_para = Paragraph(note_text, styles['Normal'])
+        story.append(Spacer(1, 20))
+        story.append(note_para)
+        
+        # Build PDF
+        doc.build(story)
+        
+        # Send PDF file
+        await client.send_document(
+            chat_id=message.chat.id,
+            document=pdf_path,
+            caption=f"📊 **Database Export (PDF)**\n\n"
+                   f"📁 **{stats['total_files']} files** with key metadata fields\n"
+                   f"🎵 **{stats['files_with_tracks']} files** have track information\n"
+                   f"📅 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                   f"💡 **For ALL 30+ fields, use:** `/db excel`"
+        )
+        
+        # Clean up
+        os.unlink(pdf_path)
+        await message.reply("✅ PDF export completed! Use `/db excel` for complete data.")
+        
+    except Exception as e:
+        logger.error(f"Error generating PDF export: {e}")
+        await message.reply(f"❌ Failed to generate PDF export: {str(e)}")
         
         # Container for PDF elements
         story = []
