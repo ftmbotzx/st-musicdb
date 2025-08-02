@@ -241,7 +241,7 @@ class DatabaseManager:
             logger.error(f"Invalid backup channel ID format: {self.backup_channel_id}")
             return None
     
-    def get_all_files(self, limit: int = None) -> List[Dict]:
+    def get_all_files(self, limit: int = None, skip: int = None) -> List[Dict]:
         """Get all files from database for export"""
         try:
             if self.collection is None:
@@ -250,6 +250,9 @@ class DatabaseManager:
                 
             query = {"is_deleted": False}
             cursor = self.collection.find(query).sort("date", -1)
+            
+            if skip:
+                cursor = cursor.skip(skip)
             
             if limit:
                 cursor = cursor.limit(limit)
