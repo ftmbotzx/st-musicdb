@@ -1,8 +1,10 @@
 import logging
 import re
+import asyncio
 from datetime import datetime
 from pyrogram import Client, filters
 from pyrogram.types import Message
+from pyrogram.errors import ChannelPrivate, ChatAdminRequired, UsernameNotOccupied
 from bot.database import DatabaseManager
 from bot.utils import extract_track_info, format_file_caption, get_file_metadata
 
@@ -10,6 +12,16 @@ logger = logging.getLogger(__name__)
 
 # Initialize database manager
 db = DatabaseManager()
+
+# Global variable to track indexing process
+indexing_process = {
+    "active": False,
+    "chat_id": None,
+    "message_id": None,
+    "total": 0,
+    "processed": 0,
+    "stop_requested": False
+}
 
 async def handle_media_message(client: Client, message: Message):
     """Handle incoming media messages and index them"""
@@ -192,6 +204,14 @@ This bot automatically indexes media files and provides retrieval functionality.
 • `/send <filename>` - Retrieve file by filename
 • `/sendid <track_id>` - Retrieve file by track ID
 • `/stats` - Show database statistics
+• `/index <channel_link>` - Start indexing from a channel or message link
+• `/stop_index` - Stop current indexing process
+
+**To start indexing:**
+1. For private channels: Add this bot as admin to the channel
+2. For public channels: No admin access needed
+3. Send `/index` with channel link or forward any message from the channel
+4. Bot will start indexing from that message and show progress
 
 The bot automatically indexes all media files (audio, video, documents, photos) with their metadata and track information.
     """
@@ -219,6 +239,280 @@ async def handle_stats_command(client: Client, message: Message):
         logger.error(f"Error getting statistics: {e}")
         await message.reply("Failed to retrieve statistics.")
 
+async def handle_index_command(client: Client, message: Message):
+    """Handle /index command to start indexing from a channel or message"""
+    global indexing_process
+    
+    if indexing_process["active"]:
+        await message.reply("⚠️ Indexing is already in progress. Use /stop_index to stop it first.")
+        return
+    
+    try:
+        # Extract channel/message info from command or forwarded message
+        if message.forward_from_chat:
+            # Handle forwarded message
+            chat_id = message.forward_from_chat.id
+            start_message_id = message.forward_from_message_id
+            chat_title = message.forward_from_chat.title or message.forward_from_chat.username
+            
+            await start_indexing_process(client, message, chat_id, start_message_id, chat_title)
+            
+        else:
+            # Handle command with link
+            command_parts = message.text.split(" ", 1)
+            if len(command_parts) < 2:
+                await message.reply("""
+**Usage:**
+• `/index <channel_link>` - Start indexing from channel
+• Forward any message from the channel and use `/index`
+
+**Examples:**
+• `/index https://t.me/channel_name`
+• `/index @channel_username`
+• Forward a message and type `/index`
+                """)
+                return
+            
+            link = command_parts[1].strip()
+            await handle_channel_link(client, message, link)
+            
+    except Exception as e:
+        logger.error(f"Error in index command: {e}")
+        await message.reply("❌ Error starting indexing process.")
+
+async def handle_channel_link(client: Client, message: Message, link: str):
+    """Handle channel link and start indexing"""
+    try:
+        # Extract channel username from link
+        if "t.me/" in link:
+            username = link.split("t.me/")[-1].split("/")[0]
+        elif link.startswith("@"):
+            username = link[1:]
+        else:
+            username = link
+            
+        # Try to get chat info
+        try:
+            chat = await client.get_chat(username)
+            chat_id = chat.id
+            chat_title = chat.title or chat.username
+            
+            # Start from latest message
+            await start_indexing_process(client, message, chat_id, None, chat_title)
+            
+        except ChannelPrivate:
+            await message.reply(f"""
+❌ **Channel is Private**
+
+To index `{username}`:
+1. Add this bot as **admin** to the channel
+2. Give it permission to read messages
+3. Try the command again
+
+Or forward any message from the channel and use `/index`
+            """)
+            
+        except ChatAdminRequired:
+            await message.reply(f"""
+❌ **Admin Rights Required**
+
+To index `{username}`:
+1. Add this bot as **admin** to the channel
+2. Give it permission to read messages
+3. Try the command again
+            """)
+            
+        except UsernameNotOccupied:
+            await message.reply(f"❌ Channel `{username}` not found. Please check the username.")
+            
+    except Exception as e:
+        logger.error(f"Error handling channel link: {e}")
+        await message.reply("❌ Error processing channel link.")
+
+async def start_indexing_process(client: Client, message: Message, chat_id: int, start_message_id: int = None, chat_title: str = "Unknown"):
+    """Start the indexing process for a channel"""
+    global indexing_process
+    
+    try:
+        # Check if bot has access to the channel
+        try:
+            chat = await client.get_chat(chat_id)
+            if start_message_id is None:
+                # Get latest message to start from
+                async for msg in client.get_chat_history(chat_id, limit=1):
+                    start_message_id = msg.id
+                    break
+                    
+        except Exception as e:
+            if "CHAT_ADMIN_REQUIRED" in str(e):
+                await message.reply(f"""
+❌ **Bot needs admin access**
+
+To index **{chat_title}**:
+1. Add this bot as admin to the channel
+2. Give it permission to read messages
+3. Try again
+                """)
+                return
+            else:
+                raise e
+        
+        # Initialize indexing process
+        indexing_process.update({
+            "active": True,
+            "chat_id": chat_id,
+            "message_id": start_message_id,
+            "total": 0,
+            "processed": 0,
+            "stop_requested": False
+        })
+        
+        # Send initial status
+        status_msg = await message.reply(f"""
+🚀 **Starting Indexing Process**
+
+📂 **Channel:** {chat_title}
+🔍 **Starting from:** Message {start_message_id}
+
+⏳ Scanning messages...
+        """)
+        
+        # Start indexing in background
+        asyncio.create_task(index_channel_messages(client, status_msg, chat_id, start_message_id, chat_title))
+        
+    except Exception as e:
+        logger.error(f"Error starting indexing: {e}")
+        await message.reply("❌ Failed to start indexing process.")
+
+async def index_channel_messages(client: Client, status_msg: Message, chat_id: int, start_message_id: int, chat_title: str):
+    """Index messages from a channel with progress updates"""
+    global indexing_process
+    
+    try:
+        # First pass: count total media messages
+        media_count = 0
+        async for msg in client.get_chat_history(chat_id, offset_id=start_message_id + 1):
+            if indexing_process["stop_requested"]:
+                break
+            if msg.audio or msg.video or msg.document or msg.photo:
+                media_count += 1
+                
+        indexing_process["total"] = media_count
+        
+        if media_count == 0:
+            await status_msg.edit_text("ℹ️ No media files found to index.")
+            indexing_process["active"] = False
+            return
+            
+        # Update status with total count
+        await status_msg.edit_text(f"""
+🚀 **Indexing Process Started**
+
+📂 **Channel:** {chat_title}
+📊 **Total Media Files:** {media_count}
+📈 **Progress:** 0/{media_count} (0%)
+
+⏳ Processing...
+        """)
+        
+        # Second pass: process messages
+        processed = 0
+        errors = 0
+        
+        async for msg in client.get_chat_history(chat_id, offset_id=start_message_id + 1):
+            if indexing_process["stop_requested"]:
+                await status_msg.edit_text(f"""
+⚠️ **Indexing Stopped**
+
+📂 **Channel:** {chat_title}
+📊 **Processed:** {processed}/{media_count}
+❌ **Stopped by user**
+                """)
+                break
+                
+            if msg.audio or msg.video or msg.document or msg.photo:
+                try:
+                    await handle_media_message(client, msg)
+                    processed += 1
+                    indexing_process["processed"] = processed
+                    
+                    # Update progress every 10 files or at the end
+                    if processed % 10 == 0 or processed == media_count:
+                        progress_bar = create_progress_bar(processed, media_count)
+                        percentage = int((processed / media_count) * 100)
+                        
+                        await status_msg.edit_text(f"""
+🚀 **Indexing In Progress**
+
+📂 **Channel:** {chat_title}
+📊 **Progress:** {processed}/{media_count} ({percentage}%)
+
+{progress_bar}
+
+⏳ Processing... 
+                        """)
+                        
+                except Exception as e:
+                    logger.error(f"Error processing message {msg.id}: {e}")
+                    errors += 1
+                    
+        # Final status
+        if not indexing_process["stop_requested"]:
+            await status_msg.edit_text(f"""
+✅ **Indexing Complete!**
+
+📂 **Channel:** {chat_title}
+📊 **Total Processed:** {processed}/{media_count}
+❌ **Errors:** {errors}
+✨ **Status:** All media files indexed successfully!
+
+Use `/send <filename>` or `/sendid <track_id>` to retrieve files.
+            """)
+            
+    except Exception as e:
+        logger.error(f"Error during indexing: {e}")
+        await status_msg.edit_text(f"""
+❌ **Indexing Failed**
+
+📂 **Channel:** {chat_title}
+📊 **Processed:** {indexing_process.get('processed', 0)}/{indexing_process.get('total', 0)}
+❌ **Error:** {str(e)}
+        """)
+    finally:
+        indexing_process["active"] = False
+
+def create_progress_bar(current: int, total: int, length: int = 20) -> str:
+    """Create a visual progress bar"""
+    if total == 0:
+        return "█" * length
+        
+    filled = int((current / total) * length)
+    bar = "█" * filled + "░" * (length - filled)
+    return f"[{bar}]"
+
+async def handle_stop_index_command(client: Client, message: Message):
+    """Handle /stop_index command"""
+    global indexing_process
+    
+    if not indexing_process["active"]:
+        await message.reply("ℹ️ No indexing process is currently running.")
+        return
+        
+    indexing_process["stop_requested"] = True
+    await message.reply("⚠️ Stopping indexing process...")
+
+async def handle_forwarded_message(client: Client, message: Message):
+    """Handle forwarded messages for indexing"""
+    if message.forward_from_chat and not indexing_process["active"]:
+        chat_title = message.forward_from_chat.title or message.forward_from_chat.username
+        await message.reply(f"""
+📨 **Forwarded Message Detected**
+
+From: **{chat_title}**
+
+To start indexing from this message, use: `/index`
+        """)
+
 def setup_handlers(app: Client):
     """Setup all message handlers"""
     
@@ -233,5 +527,10 @@ def setup_handlers(app: Client):
     app.on_message(filters.command("send"))(handle_send_command)
     app.on_message(filters.command("sendid"))(handle_sendid_command)
     app.on_message(filters.command("stats"))(handle_stats_command)
+    app.on_message(filters.command("index"))(handle_index_command)
+    app.on_message(filters.command("stop_index"))(handle_stop_index_command)
+    
+    # Forwarded message handler
+    app.on_message(filters.forwarded & ~filters.bot)(handle_forwarded_message)
     
     logger.info("All handlers registered successfully")
