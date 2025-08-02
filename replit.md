@@ -4,8 +4,11 @@
 
 This is a fully functional Telegram bot designed to automatically index and backup media files shared in Telegram chats. The bot monitors incoming media messages (audio, video, documents, photos), extracts metadata and track information, stores the data in MongoDB, and forwards files to a backup channel for preservation. It's built using the Pyrogram library for Telegram API integration and MongoDB for data persistence.
 
-**Current Status: ✅ FULLY OPERATIONAL & ENHANCED - v2.0**
+**Current Status: ✅ FULLY OPERATIONAL & ENHANCED - v2.1**
 - Bot is running and connected to Telegram with advanced features
+- **FIXED**: Track ID extraction now handles invisible Unicode characters (‌\u2063, \u00ad)
+- **FIXED**: Comprehensive URL reconstruction for broken/split Spotify URLs
+- **FIXED**: Progress updates every 2 minutes instead of constant flooding
 - Enhanced track ID extraction from "info:" sections and Spotify links
 - Real-time progress tracking with fancy status displays
 - Robust /db command with error handling for PDF export

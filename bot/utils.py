@@ -97,8 +97,8 @@ def extract_track_info(caption: str) -> Dict:
         # The issue is that \xad and \u2063 are breaking the URLs
         comprehensive_clean = caption
         problematic_chars = [
-            '­', '\u00ad',     # Soft hyphen
-            '\u2063',          # Invisible separator  
+            '\u2063',          # Invisible separator (primary issue)
+            '\u00ad',          # Soft hyphen
             '\u200b', '\u200c', '\u200d',  # Zero-width spaces
             '\ufeff',          # BOM
             '\u00a0',          # Non-breaking space
