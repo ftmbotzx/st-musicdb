@@ -10,6 +10,7 @@ dependencies = [
     "pyrogram>=2.0.106",
     "python-dotenv>=1.1.1",
     "reportlab>=4.4.3",
+    "flask",
     "tgcrypto==1.2.5",
     "xlsxwriter>=3.2.5",
 ]
