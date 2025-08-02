@@ -74,12 +74,24 @@ async def handle_media_message(client: Client, message: Message):
         
         track_info = extract_track_info(combined_text)
         
-        # Debug logging for track extraction
+        # Enhanced debug logging for track extraction
         if combined_text and ("spotify" in combined_text.lower() or "info" in combined_text.lower()):
             logger.info(f"Message text: {repr(message_text)}")
             logger.info(f"Entity URLs: {entity_urls}")
             logger.info(f"Combined text: {repr(combined_text)}")
             logger.info(f"Track extraction result: {track_info}")
+            
+            # Additional debugging for URLs that might be hidden
+            if "spotify" in combined_text.lower() and not track_info:
+                logger.warning(f"Spotify mentioned but no track extracted from: {repr(combined_text)}")
+                # Check for any URLs in the text
+                import re
+                url_pattern = r'https?://[^\s\)\]\}\n]+'
+                potential_urls = re.findall(url_pattern, combined_text)
+                if potential_urls:
+                    logger.info(f"Found potential URLs: {potential_urls}")
+                else:
+                    logger.info("No URLs found in text")
         
         # Forward file to backup channel with rate limiting
         backup_file_id = await forward_to_backup(client, message, track_info)
