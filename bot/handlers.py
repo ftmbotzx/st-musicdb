@@ -116,6 +116,10 @@ async def handle_media_message(client: Client, message: Message):
                             entity_urls.append(button.url)
                             logger.info(f"Found URL in reply markup button: {button.url}")
         
+        # Combine all text sources for comprehensive extraction FIRST
+        all_text_sources = [message_text] + entity_urls
+        combined_text = " ".join(filter(None, all_text_sources))
+        
         # ADVANCED: Try to decode potential hidden URLs in "info" sections
         # Some bots encode URLs within the "info" text using various methods
         if 'info' in combined_text.lower():
@@ -151,31 +155,45 @@ async def handle_media_message(client: Client, message: Message):
             for char in combined_text:
                 if ord(char) > 127:  # Non-ASCII character
                     logger.debug(f"Special character found: {repr(char)} (code: {ord(char)})")
+            
+            # Re-combine if new URLs were found
+            if len(entity_urls) > len([message_text]):
+                all_text_sources = [message_text] + entity_urls
+                combined_text = " ".join(filter(None, all_text_sources))
         
-        # Combine all text sources for comprehensive extraction
-        all_text_sources = [message_text] + entity_urls
-        combined_text = " ".join(filter(None, all_text_sources))
-        
+        # Extract track info from combined sources
         track_info = extract_track_info(combined_text)
         
+        # CRITICAL: If we found Spotify URLs in entities, use those directly
+        if entity_urls:
+            for url in entity_urls:
+                if 'spotify.com/track/' in url:
+                    direct_track_info = extract_track_info(url)
+                    if direct_track_info and direct_track_info.get('track_id'):
+                        track_info = direct_track_info
+                        logger.info(f"Using direct Spotify URL from entities: {url}")
+                        break
+        
         # Enhanced debug logging for track extraction
-        if combined_text and ("spotify" in combined_text.lower() or "info" in combined_text.lower()):
+        if combined_text and ("spotify" in combined_text.lower() or "info" in combined_text.lower() or entity_urls):
             logger.info(f"Message text: {repr(message_text)}")
             logger.info(f"Entity URLs: {entity_urls}")
             logger.info(f"Combined text: {repr(combined_text)}")
             logger.info(f"Track extraction result: {track_info}")
             
-            # Additional debugging for URLs that might be hidden
-            if "spotify" in combined_text.lower() and not track_info:
-                logger.warning(f"Spotify mentioned but no track extracted from: {repr(combined_text)}")
-                # Check for any URLs in the text
-                import re
-                url_pattern = r'https?://[^\s\)\]\}\n]+'
-                potential_urls = re.findall(url_pattern, combined_text)
-                if potential_urls:
-                    logger.info(f"Found potential URLs: {potential_urls}")
-                else:
-                    logger.info("No URLs found in text")
+            # If we have Spotify URLs but no track info, something is wrong
+            spotify_urls = [url for url in entity_urls if 'spotify.com/track/' in url]
+            if spotify_urls and not track_info.get('track_id'):
+                logger.warning(f"Found Spotify URLs but no track extracted: {spotify_urls}")
+                # Try to extract directly
+                for url in spotify_urls:
+                    logger.info(f"Attempting direct extraction from: {url}")
+                    direct_result = extract_track_info(url)
+                    logger.info(f"Direct extraction result: {direct_result}")
+                    if direct_result and direct_result.get('track_id'):
+                        track_info = direct_result
+                        logger.info(f"SUCCESS: Using direct extraction result")
+                        break
         
         # Forward file to backup channel with rate limiting
         backup_file_id = await forward_to_backup(client, message, track_info)
@@ -200,13 +218,34 @@ async def handle_media_message(client: Client, message: Message):
         # Add rate limiting for media processing
         await asyncio.sleep(0.3)  # Small delay to prevent rate limits
         
-        # Prepare comprehensive document for MongoDB
+        # Prepare comprehensive document for MongoDB with TRACK INFORMATION
         document = {
             "file_id": file_data["file_id"],
             "backup_file_id": backup_file_id,
             "file_unique_id": file_data["file_unique_id"],
             "file_name": file_data.get("file_name"),
             "caption": message.caption or "",
+            "file_type": file_data["file_type"],
+            "mime_type": file_data.get("mime_type"),
+            "file_size": file_data.get("file_size"),
+            "duration": file_data.get("duration"),
+            "width": file_data.get("width"),
+            "height": file_data.get("height"),
+            "chat_id": message.chat.id,
+            "chat_title": message.chat.title or (message.chat.first_name if message.chat.first_name else "Unknown"),
+            "message_id": message.id,
+            "sender_id": message.from_user.id if message.from_user else None,
+            "sender_username": message.from_user.username if message.from_user else None,
+            "sender_first_name": message.from_user.first_name if message.from_user else None,
+            "sender_last_name": message.from_user.last_name if message.from_user else None,
+            "date": message.date.isoformat(),
+            "is_deleted": False,
+            
+            # CRITICAL: Include track information in database
+            "track_url": track_info.get("track_url") if track_info else None,
+            "track_id": track_info.get("track_id") if track_info else None,
+            "platform": track_info.get("platform") if track_info else None,
+            **audio_metadata  # Include performer, title, thumbnail if available
             "file_type": file_data["file_type"],
             "mime_type": file_data.get("mime_type"),
             "file_size": file_data.get("file_size"),
