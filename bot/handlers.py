@@ -260,7 +260,7 @@ async def handle_message_link(client: Client, message: Message):
             try:
                 chat = await client.get_chat(channel_username)
                 chat_id = chat.id
-                chat_title = chat.title or chat.username
+                chat_title = getattr(chat, 'title', None) or getattr(chat, 'username', None) or channel_username
                 
                 await start_indexing_process(client, message, chat_id, message_id, chat_title)
                 
@@ -293,7 +293,7 @@ To index this channel:
 
 
 
-async def start_indexing_process(client: Client, message: Message, chat_id: int, start_message_id: int = None, chat_title: str = "Unknown"):
+async def start_indexing_process(client: Client, message: Message, chat_id: int, start_message_id: int, chat_title: str = "Unknown"):
     """Start the indexing process for a channel"""
     global indexing_process
     
@@ -302,10 +302,8 @@ async def start_indexing_process(client: Client, message: Message, chat_id: int,
         try:
             chat = await client.get_chat(chat_id)
             if start_message_id is None:
-                # Get latest message to start from
-                async for msg in client.get_chat_history(chat_id, limit=1):
-                    start_message_id = msg.id
-                    break
+                # Use a default message ID if none provided
+                start_message_id = 1
                     
         except Exception as e:
             if "CHAT_ADMIN_REQUIRED" in str(e):
@@ -353,15 +351,36 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
     global indexing_process
     
     try:
-        # First pass: count total media messages
+        # First pass: count total media messages (estimate using a smaller sample)
         media_count = 0
-        async for msg in client.get_chat_history(chat_id, offset_id=start_message_id + 1):
-            if indexing_process["stop_requested"]:
-                break
-            if msg.audio or msg.video or msg.document or msg.photo:
-                media_count += 1
+        sample_count = 0
+        sample_limit = 100  # Check first 100 messages to estimate
+        
+        try:
+            history = client.get_chat_history(chat_id, offset_id=start_message_id + 1, limit=sample_limit)
+            async for msg in history:
+                if indexing_process["stop_requested"]:
+                    break
+                sample_count += 1
+                if msg.audio or msg.video or msg.document or msg.photo:
+                    media_count += 1
+        except Exception as e:
+            logger.error(f"Error getting chat history for counting: {e}")
+            # Fallback: assume we'll process whatever we can find
+            media_count = 1
                 
-        indexing_process["total"] = media_count
+        # Estimate total based on sample (or use actual count if small channel)
+        if sample_count < sample_limit:
+            # Small channel, we counted everything
+            indexing_process["total"] = media_count
+        else:
+            # Estimate total based on ratio in sample
+            if sample_count > 0:
+                ratio = media_count / sample_count
+                estimated_total = int(ratio * 1000)  # Estimate for larger channels
+                indexing_process["total"] = max(media_count, estimated_total)
+            else:
+                indexing_process["total"] = media_count
         
         if media_count == 0:
             await status_msg.edit_text("ℹ️ No media files found to index.")
@@ -369,12 +388,13 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
             return
             
         # Update status with total count
+        total_estimate = indexing_process["total"]
         await status_msg.edit_text(f"""
 🚀 **Indexing Process Started**
 
 📂 **Channel:** {chat_title}
-📊 **Total Media Files:** {media_count}
-📈 **Progress:** 0/{media_count} (0%)
+📊 **Estimated Media Files:** {total_estimate}
+📈 **Progress:** 0/{total_estimate} (0%)
 
 ⏳ Processing...
         """)
@@ -383,42 +403,56 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
         processed = 0
         errors = 0
         
-        async for msg in client.get_chat_history(chat_id, offset_id=start_message_id + 1):
-            if indexing_process["stop_requested"]:
-                await status_msg.edit_text(f"""
+        try:
+            history = client.get_chat_history(chat_id, offset_id=start_message_id + 1, limit=10000)
+            async for msg in history:
+                if indexing_process["stop_requested"]:
+                    await status_msg.edit_text(f"""
 ⚠️ **Indexing Stopped**
 
 📂 **Channel:** {chat_title}
-📊 **Processed:** {processed}/{media_count}
+📊 **Processed:** {processed}
 ❌ **Stopped by user**
-                """)
-                break
+                    """)
+                    break
                 
-            if msg.audio or msg.video or msg.document or msg.photo:
-                try:
-                    await handle_media_message(client, msg)
-                    processed += 1
-                    indexing_process["processed"] = processed
-                    
-                    # Update progress every 10 files or at the end
-                    if processed % 10 == 0 or processed == media_count:
-                        progress_bar = create_progress_bar(processed, media_count)
-                        percentage = int((processed / media_count) * 100)
+                if msg.audio or msg.video or msg.document or msg.photo:
+                    try:
+                        await handle_media_message(client, msg)
+                        processed += 1
+                        indexing_process["processed"] = processed
                         
-                        await status_msg.edit_text(f"""
+                        # Update progress every 10 files or at the end
+                        total_estimate = indexing_process["total"]
+                        if processed % 10 == 0 or processed == total_estimate:
+                            progress_bar = create_progress_bar(processed, total_estimate)
+                            percentage = int((processed / total_estimate) * 100) if total_estimate > 0 else 100
+                            
+                            await status_msg.edit_text(f"""
 🚀 **Indexing In Progress**
 
 📂 **Channel:** {chat_title}
-📊 **Progress:** {processed}/{media_count} ({percentage}%)
+📊 **Progress:** {processed}/{total_estimate} ({percentage}%)
 
 {progress_bar}
 
 ⏳ Processing... 
-                        """)
-                        
-                except Exception as e:
-                    logger.error(f"Error processing message {msg.id}: {e}")
-                    errors += 1
+                            """)
+                            
+                    except Exception as e:
+                        logger.error(f"Error processing message {msg.id}: {e}")
+                        errors += 1
+                    
+        except Exception as e:
+            logger.error(f"Error during message iteration: {e}")
+            await status_msg.edit_text(f"""
+❌ **Indexing Error**
+
+📂 **Channel:** {chat_title}
+📊 **Processed:** {processed}
+❌ **Error:** Failed to access chat history
+            """)
+            return
                     
         # Final status
         if not indexing_process["stop_requested"]:
@@ -426,9 +460,9 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
 ✅ **Indexing Complete!**
 
 📂 **Channel:** {chat_title}
-📊 **Total Processed:** {processed}/{media_count}
+📊 **Total Processed:** {processed}
 ❌ **Errors:** {errors}
-✨ **Status:** All media files indexed successfully!
+✨ **Status:** All accessible media files indexed successfully!
 
 Use `/send <filename>` or `/sendid <track_id>` to retrieve files.
             """)

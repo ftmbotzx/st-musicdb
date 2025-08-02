@@ -221,9 +221,18 @@ class DatabaseManager:
     def get_backup_channel_id(self) -> Optional[int]:
         """Get backup channel ID"""
         try:
-            return int(self.backup_channel_id) if self.backup_channel_id else None
+            if not self.backup_channel_id:
+                return None
+            # Handle both regular channel IDs and supergroup IDs
+            channel_id = str(self.backup_channel_id).strip()
+            if channel_id.startswith('-100'):
+                return int(channel_id)
+            elif channel_id.startswith('-'):
+                return int(channel_id)
+            else:
+                return int(f"-100{channel_id}")
         except (ValueError, TypeError):
-            logger.error("Invalid backup channel ID format")
+            logger.error(f"Invalid backup channel ID format: {self.backup_channel_id}")
             return None
     
     def close_connection(self):

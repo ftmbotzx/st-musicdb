@@ -47,7 +47,8 @@ def get_file_metadata(message: Message) -> Optional[Dict]:
             
         elif message.photo:
             # Get the largest photo size (message.photo is a list of PhotoSize objects)
-            photo = max(message.photo, key=lambda x: getattr(x, 'file_size', 0) or 0)
+            photo_sizes = list(message.photo) if hasattr(message.photo, '__iter__') else [message.photo]
+            photo = max(photo_sizes, key=lambda x: getattr(x, 'file_size', 0) or 0)
             file_data = {
                 "file_id": photo.file_id,
                 "file_unique_id": photo.file_unique_id,
