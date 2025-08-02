@@ -53,8 +53,10 @@ async def handle_media_message(client: Client, message: Message):
         # Extract track information from ALL text sources including entities
         message_text = message.text or message.caption or ""
         
-        # Also check for URLs in message entities (clickable links)
+        # Also check for URLs in message entities (clickable links) and CAPTION entities
         entity_urls = []
+        
+        # Check message text entities
         if hasattr(message, 'entities') and message.entities:
             for entity in message.entities:
                 if entity.type in ["url", "text_link"]:
@@ -67,6 +69,78 @@ async def handle_media_message(client: Client, message: Message):
                         entity_url = message_text[start:end]
                         if entity_url.startswith('http'):
                             entity_urls.append(entity_url)
+        
+        # Check caption entities (URLs might be embedded in captions!)
+        if hasattr(message, 'caption_entities') and message.caption_entities:
+            caption_text = message.caption or ""
+            for entity in message.caption_entities:
+                if entity.type in ["url", "text_link"]:
+                    if hasattr(entity, 'url') and entity.url:
+                        entity_urls.append(entity.url)
+                        logger.info(f"Found URL in caption entity: {entity.url}")
+                    elif entity.type == "url":
+                        # Extract URL from caption using entity offset and length
+                        start = entity.offset
+                        end = entity.offset + entity.length
+                        if start < len(caption_text) and end <= len(caption_text):
+                            entity_url = caption_text[start:end]
+                            if entity_url.startswith('http'):
+                                entity_urls.append(entity_url)
+                                logger.info(f"Extracted URL from caption entity: {entity_url}")
+        
+        # Log all entity information for debugging
+        if hasattr(message, 'caption_entities') and message.caption_entities:
+            logger.info(f"Caption entities found: {len(message.caption_entities)}")
+            for i, entity in enumerate(message.caption_entities):
+                logger.info(f"Entity {i}: type={entity.type}, offset={entity.offset}, length={entity.length}")
+                if hasattr(entity, 'url'):
+                    logger.info(f"Entity {i} URL: {entity.url}")
+                    
+        # CRITICAL: Check for URLs embedded in message reply_markup or buttons  
+        if hasattr(message, 'reply_markup') and message.reply_markup:
+            # Check if it's an InlineKeyboardMarkup with inline_keyboard
+            if hasattr(message.reply_markup, 'inline_keyboard') and message.reply_markup.inline_keyboard:
+                for row in message.reply_markup.inline_keyboard:
+                    for button in row:
+                        if hasattr(button, 'url') and button.url:
+                            entity_urls.append(button.url)
+                            logger.info(f"Found URL in reply markup button: {button.url}")
+        
+        # ADVANCED: Try to decode potential hidden URLs in "info" sections
+        # Some bots encode URLs within the "info" text using various methods
+        if 'info' in combined_text.lower():
+            logger.info(f"Processing 'info' section for hidden URLs...")
+            
+            # Method 1: Check if URL might be base64 encoded after "info"  
+            import base64
+            import re
+            
+            # Look for base64-like strings after "info"
+            info_pattern = r'info[\s\xad\u2063]*([A-Za-z0-9+/=]{20,})'
+            info_matches = re.findall(info_pattern, combined_text)
+            
+            for encoded_text in info_matches:
+                try:
+                    # Try to decode as base64
+                    decoded_bytes = base64.b64decode(encoded_text + '==')  # Add padding
+                    decoded_text = decoded_bytes.decode('utf-8')
+                    if 'spotify' in decoded_text.lower():
+                        logger.info(f"Found potential Spotify URL in base64: {decoded_text}")
+                        entity_urls.append(decoded_text)
+                except:
+                    pass
+            
+            # Method 2: Check if there are invisible characters containing URLs
+            # Remove only visible characters and see what's left
+            visible_removed = ''.join(c for c in combined_text if ord(c) > 127)
+            if len(visible_removed) > 10:
+                logger.info(f"Found invisible character sequence: {repr(visible_removed)}")
+                
+            # Method 3: Look for URL patterns in character codes
+            # Sometimes URLs are encoded as character sequences
+            for char in combined_text:
+                if ord(char) > 127:  # Non-ASCII character
+                    logger.debug(f"Special character found: {repr(char)} (code: {ord(char)})")
         
         # Combine all text sources for comprehensive extraction
         all_text_sources = [message_text] + entity_urls

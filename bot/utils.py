@@ -123,7 +123,8 @@ def extract_track_info(caption: str) -> Dict:
         original_matches = re.findall(spotify_pattern, caption)
         urls.extend(original_matches)
         
-        # Strategy 4: Look for URLs after various info patterns in cleaned text
+        # Strategy 4: Enhanced extraction from "info" sections with hidden/embedded URLs
+        # The "info" text may contain encoded or hidden Spotify URLs
         info_patterns = [
             r'info[^\n]*?(https?://[^\s\)\n]+)',
             r'Info[^\n]*?(https?://[^\s\)\n]+)',
@@ -137,6 +138,32 @@ def extract_track_info(caption: str) -> Dict:
             # Also try on original in case the pattern exists there
             original_pattern_matches = re.findall(pattern, caption, re.IGNORECASE)
             urls.extend(original_pattern_matches)
+        
+        # Strategy 5: Extract URLs that might be encoded/hidden in the "info" section
+        # Look for patterns where info might contain encoded URLs
+        if 'info' in comprehensive_clean.lower():
+            # Check if there are any characters after "info" that might be encoded URLs
+            info_section_patterns = [
+                r'info[\s]*([^\s\n]*)',  # Capture anything after info
+                r'\|\s*info[\s]*([^\s\n]*)',  # Capture anything after | info
+            ]
+            
+            for pattern in info_section_patterns:
+                info_matches = re.findall(pattern, comprehensive_clean, re.IGNORECASE)
+                for info_content in info_matches:
+                    if info_content and len(info_content) > 10:  # Potential encoded URL
+                        logger.info(f"Found potential encoded content in info: {repr(info_content)}")
+                        
+                        # Try to decode or reconstruct URLs from the info content
+                        # Look for patterns that might be Spotify track IDs or encoded URLs
+                        spotify_id_pattern = r'[a-zA-Z0-9]{22}'  # Spotify track IDs are 22 characters
+                        potential_ids = re.findall(spotify_id_pattern, info_content)
+                        
+                        for track_id in potential_ids:
+                            if len(track_id) == 22:  # Valid Spotify track ID length
+                                reconstructed_url = f"https://open.spotify.com/track/{track_id}"
+                                urls.append(reconstructed_url)
+                                logger.info(f"Reconstructed URL from info content: {reconstructed_url}")
         
         # Strategy 5: General URL extraction from both original and cleaned text
         general_patterns = [
