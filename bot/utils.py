@@ -96,15 +96,18 @@ def extract_track_info(caption: str) -> Dict:
         # Try multiple extraction approaches without losing URLs
         urls = []
         
-        # Strategy 1: Handle the actual character present in messages for proper link extraction
+        # Strategy 1: Handle multiple separator characters for proper link extraction
         comprehensive_clean = caption
         
-        # The messages actually contain \xad (soft hyphen), so we need to handle this character
-        # to properly extract track URLs that are broken by this separator
-        separator_char = '\u00ad'  # Soft hyphen - the actual character present in the messages
+        # Handle both common separator characters that break URLs in source channels
+        separator_chars = [
+            '\u2063',  # Invisible separator - preferred character for link extraction
+            '\u00ad',  # Soft hyphen - commonly present in messages
+        ]
         
-        # Replace the separator character to reconstruct proper URLs
-        comprehensive_clean = comprehensive_clean.replace(separator_char, '')
+        # Replace all separator characters to reconstruct proper URLs
+        for separator_char in separator_chars:
+            comprehensive_clean = comprehensive_clean.replace(separator_char, '')
         
         # Also remove extra spaces that might break URLs
         comprehensive_clean = re.sub(r'\s+', ' ', comprehensive_clean)
