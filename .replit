@@ -23,3 +23,12 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "pip install pyrogram pymongo python-dotenv && python main.py"
+
+[[workflows.workflow]]
+name = "H"
+mode = "sequential"
+author = 45897102
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python clear_database.py"

@@ -96,28 +96,14 @@ def extract_track_info(caption: str) -> Dict:
         # Try multiple extraction approaches without losing URLs
         urls = []
         
-        # Strategy 1: Prioritize \u2063 (invisible separator) for proper link extraction
-        # This is the preferred character for handling URL separators
+        # Strategy 1: Use only \u2063 (invisible separator) for proper link extraction
         comprehensive_clean = caption
         
-        # Primary character handling - prioritize \u2063 (invisible separator)
-        primary_separator = '\u2063'  # Invisible separator - main target for proper link extraction
+        # Use only \u2063 (invisible separator) - the preferred character for link extraction
+        invisible_separator = '\u2063'  # Invisible separator - main target for proper link extraction
         
-        # Secondary problematic characters to clean
-        secondary_chars = [
-            '\u00ad',          # Soft hyphen (legacy approach)
-            '\u200b', '\u200c', '\u200d',  # Zero-width spaces
-            '\ufeff',          # BOM
-            '\u00a0',          # Non-breaking space
-            '\u180e',          # Mongolian vowel separator
-        ]
-        
-        # First handle the primary separator for proper link extraction
-        comprehensive_clean = comprehensive_clean.replace(primary_separator, '')
-        
-        # Then handle secondary problematic characters
-        for char in secondary_chars:
-            comprehensive_clean = comprehensive_clean.replace(char, '')
+        # Handle only the invisible separator for proper link extraction
+        comprehensive_clean = comprehensive_clean.replace(invisible_separator, '')
         
         # Also remove extra spaces that might break URLs
         comprehensive_clean = re.sub(r'\s+', ' ', comprehensive_clean)
