@@ -32,11 +32,31 @@ async def handle_media_message(client: Client, message: Message):
         if not file_data:
             return
         
-        # Extract track information from caption
-        track_info = extract_track_info(message.caption) if message.caption else {}
+        # Check if file already exists in database to prevent duplicates
+        existing_file = db.get_file_by_id(file_data["file_id"])
+        if existing_file:
+            logger.info(f"File already indexed, skipping: {file_data['file_id']}")
+            return
+            
+        # Check if unique_id exists to prevent duplicates
+        unique_id = file_data.get("file_unique_id")
+        if unique_id:
+            existing_unique = db.get_file_by_unique_id(unique_id)
+            if existing_unique:
+                logger.info(f"File with unique_id already indexed, skipping: {unique_id}")
+                return
+        
+        # Extract track information from caption/text
+        message_text = message.text or message.caption or ""
+        track_info = extract_track_info(message_text)
+        
+        # Debug logging for track extraction
+        if message_text and ("spotify" in message_text.lower() or "info" in message_text.lower()):
+            logger.info(f"Full message text: {repr(message_text)}")
+            logger.info(f"Track extraction result: {track_info}")
         
         # Forward file to backup channel with rate limiting
-        backup_file_id = await forward_to_backup(client, message)
+        backup_file_id = await forward_to_backup(client, message, track_info)
         
         # Get additional audio metadata if available
         audio_metadata = {}
@@ -97,7 +117,7 @@ async def handle_media_message(client: Client, message: Message):
     except Exception as e:
         logger.error(f"Error handling media message: {e}")
 
-async def forward_to_backup(client: Client, message: Message):
+async def forward_to_backup(client: Client, message: Message, track_info: dict = None):
     """Forward message to backup channel with proper caption and return backup file_id"""
     try:
         backup_channel_id = db.get_backup_channel_id()
@@ -105,14 +125,18 @@ async def forward_to_backup(client: Client, message: Message):
             logger.warning("No backup channel configured")
             return None
             
-        # Extract track info from original message caption/text
-        message_text = message.text or message.caption or ""
-        track_info = extract_track_info(message_text)
+        # Use provided track_info or extract from message
+        if not track_info:
+            message_text = message.text or message.caption or ""
+            track_info = extract_track_info(message_text)
         
-        # Debug logging for track extraction
-        if message_text and ("spotify" in message_text.lower() or "info" in message_text.lower()):
-            logger.info(f"Extracting track info from: {message_text[:100]}...")
-            logger.info(f"Found track info: {track_info}")
+        # Check if this file already exists in backup channel to prevent duplicates
+        file_data = get_file_metadata(message)
+        if file_data:
+            existing_backup = db.get_file_by_backup_id(file_data["file_id"])
+            if existing_backup:
+                logger.info(f"File already in backup channel, skipping forward: {file_data['file_id']}")
+                return existing_backup.get("backup_file_id")
         
         # Create detailed caption with track ID prominently displayed
         # Pass track_info to ensure track ID appears in backup caption

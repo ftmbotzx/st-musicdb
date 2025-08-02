@@ -249,6 +249,28 @@ class DatabaseManager:
             logger.error(f"Error getting all files: {e}")
             return []
     
+    def get_file_by_unique_id(self, unique_id: str):
+        """Get file by unique_id"""
+        try:
+            if self.collection is None:
+                logger.warning("Database not connected")
+                return None
+            return self.collection.find_one({"file_unique_id": unique_id})
+        except Exception as e:
+            logger.error(f"Error finding file by unique ID: {e}")
+            return None
+    
+    def get_file_by_backup_id(self, backup_file_id: str):
+        """Check if file already exists in backup by backup_file_id"""
+        try:
+            if self.collection is None:
+                logger.warning("Database not connected")
+                return None
+            return self.collection.find_one({"backup_file_id": backup_file_id})
+        except Exception as e:
+            logger.error(f"Error finding file by backup ID: {e}")
+            return None
+    
     def close_connection(self):
         """Close MongoDB connection"""
         if self.client:

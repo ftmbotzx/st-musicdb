@@ -88,21 +88,42 @@ def extract_track_info(caption: str) -> Dict:
             "apple_music": r"https?://music\.apple\.com/[^/]+/album/[^/]+/([0-9]+)"
         }
         
-        # Search for URLs in caption - also look for info: sections
-        url_pattern = r"https?://[^\s\)\n]+"
-        urls = re.findall(url_pattern, caption)
+        # Clean caption text and handle special characters extensively
+        clean_caption = caption
+        # Remove various types of special characters and invisible chars
+        special_chars = ['­', '\u00ad', '\u200b', '\u200c', '\u200d', '\ufeff']
+        for char in special_chars:
+            clean_caption = clean_caption.replace(char, '')
         
-        # Also check for URLs inside "info:" sections or similar patterns
-        info_pattern = r"(?:info:|Info:|INFO:|ℹ️)[^:]*:?[^:]*?(https?://[^\s\)\n]+)"
-        info_urls = re.findall(info_pattern, caption, re.IGNORECASE | re.DOTALL)
-        urls.extend(info_urls)
+        logger.info(f"Original caption: {repr(caption)}")
+        logger.info(f"Cleaned caption: {repr(clean_caption)}")
         
-        # Look for direct Spotify links more aggressively
-        spotify_pattern = r"(https?://open\.spotify\.com/track/[a-zA-Z0-9]+)"
-        spotify_urls = re.findall(spotify_pattern, caption)
-        urls.extend(spotify_urls)
+        # Multiple URL extraction strategies
+        urls = []
         
-        for url in urls:
+        # Strategy 1: Look for all HTTP URLs
+        general_urls = re.findall(r'https?://[^\s\)\n]+', clean_caption, re.IGNORECASE)
+        urls.extend(general_urls)
+        
+        # Strategy 2: Look specifically after "info" keyword
+        info_matches = re.findall(r'info[^\n]*?(https?://[^\s\)\n]+)', clean_caption, re.IGNORECASE)
+        urls.extend(info_matches)
+        
+        # Strategy 3: Extract Spotify URLs specifically
+        spotify_matches = re.findall(r'(https?://open\.spotify\.com/track/[a-zA-Z0-9]+)', clean_caption)
+        urls.extend(spotify_matches)
+        
+        # Strategy 4: Split by words and look for URLs
+        words = clean_caption.split()
+        for word in words:
+            if word.startswith('http') and 'spotify.com/track/' in word:
+                urls.append(word)
+        
+        # Remove duplicates while preserving order
+        unique_urls = list(dict.fromkeys(urls))
+        logger.info(f"Found URLs: {unique_urls}")
+        
+        for url in unique_urls:
             for platform, pattern in patterns.items():
                 match = re.search(pattern, url)
                 if match:
