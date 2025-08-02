@@ -105,11 +105,12 @@ async def forward_to_backup(client: Client, message: Message):
             logger.warning("No backup channel configured")
             return None
             
-        # Extract track info for caption
+        # Extract track info from original message caption/text
         track_info = extract_track_info(message.text or message.caption or "")
         
         # Create detailed caption with track ID prominently displayed
-        backup_caption = format_file_caption(message, include_track_id=True)
+        # Pass track_info to ensure track ID appears in backup caption
+        backup_caption = format_file_caption(message, include_track_id=True, track_info_override=track_info)
         
         # Send file to backup channel with proper caption based on file type
         forwarded_msg = None
@@ -447,14 +448,16 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
         errors = 0
         current_msg_id = start_message_id
         consecutive_failures = 0
-        max_failures = 10  # Stop after 10 consecutive failed message retrievals
+        max_failures = 50  # Allow more failures before stopping
+        max_processed = 1000  # Process up to 1000 messages
         
-        while consecutive_failures < max_failures and not indexing_process["stop_requested"]:
+        while consecutive_failures < max_failures and processed < max_processed and not indexing_process["stop_requested"]:
             try:
                 # Try to get the specific message
                 try:
                     messages = await client.get_messages(chat_id, current_msg_id)
                     consecutive_failures = 0  # Reset failure count on success
+                    fetched_messages += 1
                     
                     # Handle both single message and list of messages
                     msg_list = messages if isinstance(messages, list) else [messages]
@@ -466,21 +469,25 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
                                 processed += 1
                                 indexing_process["processed"] = processed
                                 
-                                # Update progress every 10 files
-                                if processed % 10 == 0:
-                                    skipped_messages = (start_message_id - current_msg_id) - processed
-                                    fetched_messages = start_message_id - current_msg_id
-                                    fancy_status = create_fancy_progress_status(
-                                        processed=processed,
-                                        errors=errors,
-                                        current_msg_id=current_msg_id,
-                                        chat_title=chat_title,
-                                        total_messages=start_message_id,
-                                        fetched_messages=fetched_messages,
-                                        skipped=skipped_messages
-                                    )
+                                # Update progress every 5 files or every 20 messages
+                                if processed % 5 == 0 or fetched_messages % 20 == 0:
+                                    progress_percentage = min(100, (processed / 100) * 100) if processed < 100 else 100
                                     
-                                    await status_msg.edit_text(f"```\n{fancy_status}\n```")
+                                    progress_text = f"""
+🚀 **Indexing in Progress**
+
+📂 **Channel:** {chat_title}
+📊 **Progress:** {processed} files processed
+📨 **Current Message:** {current_msg_id}
+📥 **Scanned:** {fetched_messages} messages
+❌ **Errors:** {errors}
+
+⏳ **Status:** {"Processing..." if not indexing_process["stop_requested"] else "Stopping..."}
+
+Use /cancel to stop indexing
+                                    """
+                                    
+                                    await status_msg.edit_text(progress_text)
                                     
                             except Exception as e:
                                 logger.error(f"Error processing message {msg.id}: {e}")
@@ -710,13 +717,12 @@ async def handle_db_command(client: Client, message: Message):
         doc.build(story)
         
         # Send PDF file
-        with open(pdf_path, 'rb') as pdf_file:
-            await client.send_document(
-                chat_id=message.chat.id,
-                document=pdf_path,
-                file_name=f"database_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-                caption=f"📊 Database Export\n\n📁 Total Files: {len(files)}\n📅 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            )
+        await client.send_document(
+            chat_id=message.chat.id,
+            document=pdf_path,
+            file_name=f"database_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+            caption=f"📊 Database Export\n\n📁 Total Files: {len(files)}\n📅 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
         
         # Clean up temporary file
         os.unlink(pdf_path)
@@ -753,6 +759,7 @@ def setup_handlers(app: Client):
     app.on_message(filters.command("sendid"))(handle_sendid_command)
     app.on_message(filters.command("stats"))(handle_stats_command)
     app.on_message(filters.command("stop_index"))(handle_stop_index_command)
+    app.on_message(filters.command("cancel"))(handle_stop_index_command)  # /cancel works same as /stop_index
     app.on_message(filters.command("db"))(handle_db_command)
     
     # Message link handler

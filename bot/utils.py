@@ -88,9 +88,14 @@ def extract_track_info(caption: str) -> Dict:
             "apple_music": r"https?://music\.apple\.com/[^/]+/album/[^/]+/([0-9]+)"
         }
         
-        # Search for URLs in caption
-        url_pattern = r"https?://[^\s\)]+"
+        # Search for URLs in caption - also look for info: sections
+        url_pattern = r"https?://[^\s\)\n]+"
         urls = re.findall(url_pattern, caption)
+        
+        # Also check for URLs inside "info:" sections or similar patterns
+        info_pattern = r"(?:info:|Info:|INFO:).*?(https?://[^\s\)\n]+)"
+        info_urls = re.findall(info_pattern, caption, re.IGNORECASE | re.DOTALL)
+        urls.extend(info_urls)
         
         for url in urls:
             for platform, pattern in patterns.items():
@@ -117,7 +122,7 @@ def extract_track_info(caption: str) -> Dict:
         logger.error(f"Error extracting track info: {e}")
         return {}
 
-def format_file_caption(message_or_doc, include_track_id=False) -> str:
+def format_file_caption(message_or_doc, include_track_id=False, track_info_override=None) -> str:
     """Format a detailed caption for file"""
     try:
         caption_parts = []
@@ -136,9 +141,13 @@ def format_file_caption(message_or_doc, include_track_id=False) -> str:
             width = file_metadata.get("width")
             height = file_metadata.get("height")
             
-            # Extract track info from message text/caption
-            text_content = getattr(message_or_doc, 'text', '') or getattr(message_or_doc, 'caption', '')
-            track_info = extract_track_info(text_content)
+            # Extract track info from message text/caption or use override
+            if track_info_override:
+                track_info = track_info_override
+            else:
+                text_content = getattr(message_or_doc, 'text', '') or getattr(message_or_doc, 'caption', '')
+                track_info = extract_track_info(text_content)
+            
             track_url = track_info.get("track_url")
             track_id = track_info.get("track_id")
             
@@ -154,8 +163,15 @@ def format_file_caption(message_or_doc, include_track_id=False) -> str:
             duration = message_or_doc.get("duration")
             width = message_or_doc.get("width")
             height = message_or_doc.get("height")
-            track_url = message_or_doc.get("track_url")
-            track_id = message_or_doc.get("track_id")
+            
+            # Use override track info if provided, otherwise use from document
+            if track_info_override:
+                track_url = track_info_override.get("track_url")
+                track_id = track_info_override.get("track_id")
+            else:
+                track_url = message_or_doc.get("track_url")
+                track_id = message_or_doc.get("track_id")
+            
             chat_title = message_or_doc.get("chat_title", "Unknown Channel")
             date = message_or_doc.get("date")
         
