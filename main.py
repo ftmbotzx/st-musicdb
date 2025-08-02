@@ -39,8 +39,11 @@ except (ValueError, TypeError):
     exit(1)
 
 def main():
-    """Initialize and start the Telegram bot"""
+    """Initialize and start both the Telegram bot and web server"""
     try:
+        # Import Flask app
+        from app import run_flask_app
+        
         # Create Pyrogram client
         app = Client(
             "media_indexer_bot",
@@ -52,9 +55,15 @@ def main():
         # Setup handlers
         setup_handlers(app)
         
-        logger.info("Starting Media Indexer Bot...")
+        logger.info("Starting Media Indexer Bot and Web Server...")
         
-        # Start the bot
+        # Start Flask web server in a separate thread
+        import threading
+        web_thread = threading.Thread(target=run_flask_app, daemon=True)
+        web_thread.start()
+        logger.info("Web server started on http://0.0.0.0:5000")
+        
+        # Start the Telegram bot (blocking)
         app.run()
         
     except Exception as e:
