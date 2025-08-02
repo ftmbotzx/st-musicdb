@@ -33,18 +33,21 @@ async def handle_media_message(client: Client, message: Message):
             return
         
         # Check if file already exists in database to prevent duplicates
-        existing_file = db.get_file_by_id(file_data["file_id"])
-        if existing_file:
-            logger.info(f"File already indexed, skipping: {file_data['file_id']}")
-            return
-            
-        # Check if unique_id exists to prevent duplicates
-        unique_id = file_data.get("file_unique_id")
-        if unique_id:
-            existing_unique = db.get_file_by_unique_id(unique_id)
-            if existing_unique:
-                logger.info(f"File with unique_id already indexed, skipping: {unique_id}")
+        try:
+            existing_file = db.get_file_by_id(file_data["file_id"])
+            if existing_file:
+                logger.info(f"File already indexed, skipping: {file_data['file_id']}")
                 return
+                
+            # Check if unique_id exists to prevent duplicates
+            unique_id = file_data.get("file_unique_id")
+            if unique_id:
+                existing_unique = db.get_file_by_unique_id(unique_id)
+                if existing_unique:
+                    logger.info(f"File with unique_id already indexed, skipping: {unique_id}")
+                    return
+        except AttributeError as e:
+            logger.warning(f"Database method not available: {e}, proceeding with indexing")
         
         # Extract track information from caption/text
         message_text = message.text or message.caption or ""
@@ -133,10 +136,13 @@ async def forward_to_backup(client: Client, message: Message, track_info: dict =
         # Check if this file already exists in backup channel to prevent duplicates
         file_data = get_file_metadata(message)
         if file_data:
-            existing_backup = db.get_file_by_backup_id(file_data["file_id"])
-            if existing_backup:
-                logger.info(f"File already in backup channel, skipping forward: {file_data['file_id']}")
-                return existing_backup.get("backup_file_id")
+            try:
+                existing_backup = db.get_file_by_backup_id(file_data["file_id"])
+                if existing_backup:
+                    logger.info(f"File already in backup channel, skipping forward: {file_data['file_id']}")
+                    return existing_backup.get("backup_file_id")
+            except AttributeError:
+                logger.debug("Backup check method not available, proceeding with forward")
         
         # Create detailed caption with track ID prominently displayed
         # Pass track_info to ensure track ID appears in backup caption

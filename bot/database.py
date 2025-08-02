@@ -81,6 +81,17 @@ class DatabaseManager:
             logger.error(f"Error inserting file: {e}")
             return False
     
+    def get_file_by_id(self, file_id: str):
+        """Get file by file_id"""
+        try:
+            if self.collection is None:
+                logger.warning("Database not connected")
+                return None
+            return self.collection.find_one({"file_id": file_id})
+        except Exception as e:
+            logger.error(f"Error finding file by ID: {e}")
+            return None
+    
     def find_file_by_name(self, filename: str) -> Optional[Dict]:
         """Find a file by its filename"""
         try:
