@@ -93,17 +93,36 @@ def extract_track_info(caption: str) -> Dict:
         # Try multiple extraction approaches without losing URLs
         urls = []
         
-        # Strategy 1: Direct regex on original text (with special chars)
+        # Strategy 1: Aggressive cleaning of ALL invisible and problematic characters
+        # The issue is that \xad and \u2063 are breaking the URLs
+        comprehensive_clean = caption
+        problematic_chars = [
+            '­', '\u00ad',     # Soft hyphen
+            '\u2063',          # Invisible separator  
+            '\u200b', '\u200c', '\u200d',  # Zero-width spaces
+            '\ufeff',          # BOM
+            '\u00a0',          # Non-breaking space
+            '\u180e',          # Mongolian vowel separator
+        ]
+        
+        for char in problematic_chars:
+            comprehensive_clean = comprehensive_clean.replace(char, '')
+        
+        # Also remove extra spaces that might break URLs
+        comprehensive_clean = re.sub(r'\s+', ' ', comprehensive_clean)
+        
+        logger.info(f"Cleaned caption: {repr(comprehensive_clean)}")
+        
+        # Strategy 2: Extract from comprehensively cleaned text
         spotify_pattern = r'https?://open\.spotify\.com/track/[a-zA-Z0-9]+'
+        clean_matches = re.findall(spotify_pattern, comprehensive_clean)
+        urls.extend(clean_matches)
+        
+        # Strategy 3: Direct regex on original text (in case cleaning broke something)
         original_matches = re.findall(spotify_pattern, caption)
         urls.extend(original_matches)
         
-        # Strategy 2: Clean some special chars but preserve structure
-        light_clean = caption.replace('­', '').replace('\u00ad', '')
-        light_matches = re.findall(spotify_pattern, light_clean)
-        urls.extend(light_matches)
-        
-        # Strategy 3: Look for URLs after various info patterns
+        # Strategy 4: Look for URLs after various info patterns in cleaned text
         info_patterns = [
             r'info[^\n]*?(https?://[^\s\)\n]+)',
             r'Info[^\n]*?(https?://[^\s\)\n]+)',
@@ -112,48 +131,55 @@ def extract_track_info(caption: str) -> Dict:
         ]
         
         for pattern in info_patterns:
-            matches = re.findall(pattern, caption, re.IGNORECASE)
+            matches = re.findall(pattern, comprehensive_clean, re.IGNORECASE)
             urls.extend(matches)
-            matches_clean = re.findall(pattern, light_clean, re.IGNORECASE)
-            urls.extend(matches_clean)
+            # Also try on original in case the pattern exists there
+            original_pattern_matches = re.findall(pattern, caption, re.IGNORECASE)
+            urls.extend(original_pattern_matches)
         
-        # Strategy 4: General URL extraction - handle line breaks and spaces
-        # First try without any breaks
-        general_urls = re.findall(r'https?://[^\s\)\n]+', caption)
-        urls.extend(general_urls)
-        general_urls_clean = re.findall(r'https?://[^\s\)\n]+', light_clean)
-        urls.extend(general_urls_clean)
+        # Strategy 5: General URL extraction from both original and cleaned text
+        general_patterns = [
+            r'https?://[^\s\)\n]+',
+            r'https?://open\.spotify\.com/track/[a-zA-Z0-9]+',
+        ]
         
-        # Strategy 4b: Handle URLs split by spaces or line breaks
-        # Remove spaces and newlines from URLs that might be split
-        no_spaces = re.sub(r'(https?://[^\s]*)\s+([^\s]*spotify\.com[^\s]*)', r'\1\2', caption)
-        no_spaces = re.sub(r'(https?://[^\s]*)\s+([^\s]*)', r'\1\2', no_spaces)
-        if no_spaces != caption:
-            fixed_urls = re.findall(r'https?://[^\s\)\n]+', no_spaces)
-            urls.extend(fixed_urls)
+        for pattern in general_patterns:
+            # From original caption
+            original_urls = re.findall(pattern, caption)
+            urls.extend(original_urls)
+            # From cleaned caption  
+            clean_urls = re.findall(pattern, comprehensive_clean)
+            urls.extend(clean_urls)
         
-        # Strategy 5: Split by whitespace and check each part
-        words = caption.split()
+        # Strategy 6: Split by whitespace and check each part from cleaned text
+        words = comprehensive_clean.split()
         for word in words:
             # Remove common trailing chars and check
             clean_word = word.rstrip('.,!?;)')
             if 'spotify.com/track/' in clean_word:
                 urls.append(clean_word)
         
-        # Strategy 6: Reconstruct broken URLs from fragments
+        # Strategy 7: Reconstruct broken URLs from fragments
         # Look for "https ://open.spotify.com" patterns (broken by spaces)
-        broken_url_pattern = r'https\s*:\s*//\s*open\.\s*spotify\.\s*com\s*/\s*track\s*/\s*([a-zA-Z0-9]+)'
-        broken_matches = re.findall(broken_url_pattern, caption)
-        for track_id in broken_matches:
-            reconstructed = f"https://open.spotify.com/track/{track_id}"
-            urls.append(reconstructed)
-            logger.info(f"Reconstructed broken URL: {reconstructed}")
+        broken_patterns = [
+            r'https\s*:\s*//\s*open\.\s*spotify\.\s*com\s*/\s*track\s*/\s*([a-zA-Z0-9]+)',
+            r'https://open\.\s*spotify\.\s*com\s*/\s*track\s*/\s*([a-zA-Z0-9]+)',
+            r'https://open\.spotify\.\s*com\s*/\s*track\s*/\s*([a-zA-Z0-9]+)',
+        ]
         
-        # Strategy 7: Fix URLs with spaces inside them
-        # Find URLs that start correctly but have spaces
-        space_pattern = r'(https://[^\s]*spotify\.com[^\s]*)'
-        potential_urls = re.findall(space_pattern, caption.replace(' ', ''))
-        urls.extend(potential_urls)
+        for pattern in broken_patterns:
+            broken_matches = re.findall(pattern, caption)
+            for track_id in broken_matches:
+                reconstructed = f"https://open.spotify.com/track/{track_id}"
+                urls.append(reconstructed)
+                logger.info(f"Reconstructed broken URL: {reconstructed}")
+            
+            # Also try on cleaned text
+            clean_broken_matches = re.findall(pattern, comprehensive_clean)
+            for track_id in clean_broken_matches:
+                reconstructed = f"https://open.spotify.com/track/{track_id}"
+                urls.append(reconstructed)
+                logger.info(f"Reconstructed broken URL from cleaned text: {reconstructed}")
         
         # Remove duplicates while preserving order
         unique_urls = list(dict.fromkeys([url for url in urls if url]))
