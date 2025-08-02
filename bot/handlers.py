@@ -106,7 +106,13 @@ async def forward_to_backup(client: Client, message: Message):
             return None
             
         # Extract track info from original message caption/text
-        track_info = extract_track_info(message.text or message.caption or "")
+        message_text = message.text or message.caption or ""
+        track_info = extract_track_info(message_text)
+        
+        # Debug logging for track extraction
+        if message_text and ("spotify" in message_text.lower() or "info" in message_text.lower()):
+            logger.info(f"Extracting track info from: {message_text[:100]}...")
+            logger.info(f"Found track info: {track_info}")
         
         # Create detailed caption with track ID prominently displayed
         # Pass track_info to ensure track ID appears in backup caption
@@ -469,25 +475,24 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
                                 processed += 1
                                 indexing_process["processed"] = processed
                                 
-                                # Update progress every 5 files or every 20 messages
-                                if processed % 5 == 0 or fetched_messages % 20 == 0:
-                                    progress_percentage = min(100, (processed / 100) * 100) if processed < 100 else 100
+                                # Update progress every 3 files or every 15 messages
+                                if processed % 3 == 0 or fetched_messages % 15 == 0:
+                                    # Calculate progress percentage based on current position
+                                    progress_percentage = min(100, int((fetched_messages / max(start_message_id, 100)) * 100))
                                     
-                                    progress_text = f"""
-🚀 **Indexing in Progress**
-
-📂 **Channel:** {chat_title}
-📊 **Progress:** {processed} files processed
-📨 **Current Message:** {current_msg_id}
-📥 **Scanned:** {fetched_messages} messages
-❌ **Errors:** {errors}
-
-⏳ **Status:** {"Processing..." if not indexing_process["stop_requested"] else "Stopping..."}
-
-Use /cancel to stop indexing
-                                    """
+                                    # Create fancy status with proper progress bar
+                                    fancy_status = create_fancy_progress_status(
+                                        processed=processed,
+                                        errors=errors,
+                                        current_msg_id=current_msg_id,
+                                        chat_title=chat_title,
+                                        total_messages=start_message_id,
+                                        fetched_messages=fetched_messages,
+                                        skipped=fetched_messages - processed,
+                                        percentage=progress_percentage
+                                    )
                                     
-                                    await status_msg.edit_text(progress_text)
+                                    await status_msg.edit_text(f"```\n{fancy_status}\n```")
                                     
                             except Exception as e:
                                 logger.error(f"Error processing message {msg.id}: {e}")
@@ -546,11 +551,12 @@ Use /cancel to stop indexing
     finally:
         indexing_process["active"] = False
 
-def create_fancy_progress_status(processed: int, errors: int, current_msg_id: int, chat_title: str, total_messages: int, fetched_messages: int, skipped: int = 0) -> str:
+def create_fancy_progress_status(processed: int, errors: int, current_msg_id: int, chat_title: str, total_messages: int, fetched_messages: int, skipped: int = 0, percentage: int = 0) -> str:
     """Create a fancy progress status display"""
     
-    # Calculate percentage based on fetched vs total messages
-    percentage = int((fetched_messages / total_messages) * 100) if total_messages > 0 else 0
+    # Use provided percentage or calculate based on fetched vs total messages
+    if percentage == 0:
+        percentage = int((fetched_messages / total_messages) * 100) if total_messages > 0 else 0
     
     status_text = f"""╔════❰ ɪɴᴅᴇxɪɴɢ sᴛᴀᴛᴜs  ❱═❍⊱❁
 ║╭━━━━━━━━━━━━━━━➣
@@ -627,14 +633,18 @@ async def handle_db_command(client: Client, message: Message):
             return
         
         # Generate PDF
-        from reportlab.lib.pagesizes import A4
-        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.lib import colors
-        from reportlab.lib.units import inch
-        from datetime import datetime
-        import tempfile
-        import os
+        try:
+            from reportlab.lib.pagesizes import A4
+            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib import colors
+            from reportlab.lib.units import inch
+            from datetime import datetime
+            import tempfile
+            import os
+        except ImportError as e:
+            await message.reply(f"❌ PDF generation libraries not available: {e}")
+            return
         
         # Create temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
@@ -682,15 +692,19 @@ async def handle_db_command(client: Client, message: Message):
         data = [['#', 'File Name', 'Type', 'Size (MB)', 'Duration', 'Track ID', 'Source', 'Date']]
         
         for i, file_doc in enumerate(files[:1000], 1):  # Limit to 1000 files for PDF
-            file_name = file_doc.get('file_name', 'Unknown')[:30]  # Truncate long names
-            file_type = file_doc.get('file_type', 'Unknown')
-            file_size = file_doc.get('file_size', 0)
+            if not file_doc:  # Skip None documents
+                continue
+                
+            file_name = str(file_doc.get('file_name', 'Unknown'))[:30]  # Truncate long names
+            file_type = str(file_doc.get('file_type', 'Unknown'))
+            file_size = file_doc.get('file_size', 0) or 0
             size_mb = f"{round(file_size / (1024 * 1024), 2):.2f}" if file_size else "0"
-            duration = file_doc.get('duration', 0)
+            duration = file_doc.get('duration', 0) or 0
             duration_str = f"{duration//60:02d}:{duration%60:02d}" if duration else "N/A"
-            track_id = file_doc.get('track_id', 'N/A')[:20]  # Truncate long IDs
-            source = file_doc.get('chat_title', 'Unknown')[:20]
-            date = file_doc.get('date', '')[:10]  # Just date part
+            track_id = str(file_doc.get('track_id', 'N/A'))[:20]  # Truncate long IDs
+            source = str(file_doc.get('chat_title', 'Unknown'))[:20]
+            date_str = str(file_doc.get('date', ''))
+            date = date_str[:10] if date_str else "N/A"  # Just date part
             
             data.append([
                 str(i), file_name, file_type, size_mb, 

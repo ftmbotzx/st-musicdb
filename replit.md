@@ -4,14 +4,16 @@
 
 This is a fully functional Telegram bot designed to automatically index and backup media files shared in Telegram chats. The bot monitors incoming media messages (audio, video, documents, photos), extracts metadata and track information, stores the data in MongoDB, and forwards files to a backup channel for preservation. It's built using the Pyrogram library for Telegram API integration and MongoDB for data persistence.
 
-**Current Status: ✅ FULLY OPERATIONAL & ENHANCED**
-- Bot is running and connected to Telegram
-- All message handlers are active including new /db command
-- Comprehensive metadata storage implemented with all track information
-- Rate limiting added to prevent Pyrogram FloodWait errors
-- Track IDs now prominently displayed in backup channel captions
-- PDF export functionality for complete database
-- Enhanced error handling and LSP compliance
+**Current Status: ✅ FULLY OPERATIONAL & ENHANCED - v2.0**
+- Bot is running and connected to Telegram with advanced features
+- Enhanced track ID extraction from "info:" sections and Spotify links
+- Real-time progress tracking with fancy status displays
+- Robust /db command with error handling for PDF export
+- /cancel command added for stopping indexing processes
+- Comprehensive rate limiting prevents FloodWait errors automatically
+- Track IDs prominently displayed in backup channel captions
+- Enhanced debugging and logging for track extraction
+- Processes up to 1000 messages without stopping after 5
 
 ## User Preferences
 

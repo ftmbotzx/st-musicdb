@@ -93,9 +93,14 @@ def extract_track_info(caption: str) -> Dict:
         urls = re.findall(url_pattern, caption)
         
         # Also check for URLs inside "info:" sections or similar patterns
-        info_pattern = r"(?:info:|Info:|INFO:).*?(https?://[^\s\)\n]+)"
+        info_pattern = r"(?:info:|Info:|INFO:|ℹ️)[^:]*:?[^:]*?(https?://[^\s\)\n]+)"
         info_urls = re.findall(info_pattern, caption, re.IGNORECASE | re.DOTALL)
         urls.extend(info_urls)
+        
+        # Look for direct Spotify links more aggressively
+        spotify_pattern = r"(https?://open\.spotify\.com/track/[a-zA-Z0-9]+)"
+        spotify_urls = re.findall(spotify_pattern, caption)
+        urls.extend(spotify_urls)
         
         for url in urls:
             for platform, pattern in patterns.items():
