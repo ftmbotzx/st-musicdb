@@ -4,12 +4,14 @@
 
 This is a fully functional Telegram bot designed to automatically index and backup media files shared in Telegram chats. The bot monitors incoming media messages (audio, video, documents, photos), extracts metadata and track information, stores the data in MongoDB, and forwards files to a backup channel for preservation. It's built using the Pyrogram library for Telegram API integration and MongoDB for data persistence.
 
-**Current Status: ✅ FULLY OPERATIONAL & ENHANCED - v2.3**
+**Current Status: ✅ FULLY OPERATIONAL & ENHANCED - v2.4**
 - Bot is running and connected to Telegram with advanced features
 - **TESTED & VERIFIED**: Link extraction working perfectly with both \u2063 and \u00ad characters
 - **ENHANCED**: Advanced \u2063 character detection in "info" sections for embedded URL extraction
 - **CONFIRMED**: Track ID extraction handles invisible separator (\u2063) and soft hyphen (\u00ad) in all scenarios
 - **READY**: System detects and processes URLs hidden with \u2063 in Spotify_downloaderrr_bot info sections
+- **FIXED**: Critical bug where Spotify URLs from TEXT_LINK entities weren't being captured for processing
+- **VERIFIED**: Bot now extracts track IDs from https://t.me/Spotifyapk56/18091042 format messages
 - **FIXED**: Progress updates every 2 minutes instead of constant flooding
 - Enhanced track ID extraction from "info:" sections and Spotify links
 - Real-time progress tracking with fancy status displays

@@ -98,13 +98,19 @@ async def handle_media_message(client: Client, message: Message):
                                 entity_urls.append(entity_url)
                                 logger.info(f"Extracted URL from caption entity: {entity_url}")
         
-        # Log all entity information for debugging
+        # Log all entity information for debugging and CAPTURE URLs
         if hasattr(message, 'caption_entities') and message.caption_entities:
             logger.info(f"Caption entities found: {len(message.caption_entities)}")
             for i, entity in enumerate(message.caption_entities):
                 logger.info(f"Entity {i}: type={entity.type}, offset={entity.offset}, length={entity.length}")
-                if hasattr(entity, 'url'):
+                if hasattr(entity, 'url') and entity.url:
                     logger.info(f"Entity {i} URL: {entity.url}")
+                    # CRITICAL: Ensure all entity URLs are captured
+                    if entity.url not in entity_urls:
+                        entity_urls.append(entity.url)
+                        logger.info(f"Added entity URL to list: {entity.url}")
+                else:
+                    logger.info(f"Entity {i} URL: None")
                     
         # CRITICAL: Check for URLs embedded in message reply_markup or buttons  
         if hasattr(message, 'reply_markup') and message.reply_markup:
@@ -164,15 +170,17 @@ async def handle_media_message(client: Client, message: Message):
         # Extract track info from combined sources
         track_info = extract_track_info(combined_text)
         
-        # CRITICAL: If we found Spotify URLs in entities, use those directly
-        if entity_urls:
-            for url in entity_urls:
-                if 'spotify.com/track/' in url:
-                    direct_track_info = extract_track_info(url)
-                    if direct_track_info and direct_track_info.get('track_id'):
-                        track_info = direct_track_info
-                        logger.info(f"Using direct Spotify URL from entities: {url}")
-                        break
+        # CRITICAL: If we found Spotify URLs in entities, use those directly  
+        spotify_entity_urls = [url for url in entity_urls if 'spotify.com/track/' in url]
+        if spotify_entity_urls:
+            logger.info(f"Found {len(spotify_entity_urls)} Spotify URLs in entities: {spotify_entity_urls}")
+            for url in spotify_entity_urls:
+                direct_track_info = extract_track_info(url)
+                logger.info(f"Direct extraction from {url}: {direct_track_info}")
+                if direct_track_info and direct_track_info.get('track_id'):
+                    track_info = direct_track_info
+                    logger.info(f"SUCCESS: Using Spotify URL from entity: {url} -> Track ID: {direct_track_info.get('track_id')}")
+                    break
         
         # Enhanced debug logging for track extraction
         if combined_text and ("spotify" in combined_text.lower() or "info" in combined_text.lower() or entity_urls):
@@ -245,25 +253,6 @@ async def handle_media_message(client: Client, message: Message):
             "track_url": track_info.get("track_url") if track_info else None,
             "track_id": track_info.get("track_id") if track_info else None,
             "platform": track_info.get("platform") if track_info else None,
-            **audio_metadata  # Include performer, title, thumbnail if available
-            "file_type": file_data["file_type"],
-            "mime_type": file_data.get("mime_type"),
-            "file_size": file_data.get("file_size"),
-            "duration": file_data.get("duration"),
-            "width": file_data.get("width"),
-            "height": file_data.get("height"),
-            "chat_id": message.chat.id,
-            "chat_title": message.chat.title or (message.chat.first_name if message.chat.first_name else "Unknown"),
-            "message_id": message.id,
-            "sender_id": message.from_user.id if message.from_user else None,
-            "sender_username": message.from_user.username if message.from_user else None,
-            "sender_first_name": message.from_user.first_name if message.from_user else None,
-            "sender_last_name": message.from_user.last_name if message.from_user else None,
-            "date": message.date.isoformat(),
-            "is_deleted": False,
-            "track_url": track_info.get("track_url"),
-            "track_id": track_info.get("track_id"),
-            "platform": track_info.get("platform"),
             **audio_metadata  # Include performer, title, thumbnail if available
         }
         
