@@ -112,83 +112,95 @@ def extract_track_info(caption: str) -> Dict:
         logger.error(f"Error extracting track info: {e}")
         return {}
 
-def format_file_caption(file_doc: Dict) -> str:
-    """Format a custom caption for file retrieval"""
+def format_file_caption(message_or_doc) -> str:
+    """Format a detailed caption for file"""
     try:
         caption_parts = []
         
-        # File information
-        file_name = file_doc.get("file_name", "Unknown")
-        file_type = file_doc.get("file_type", "file").title()
+        # Check if it's a Message object or a dict
+        if hasattr(message_or_doc, 'audio') or hasattr(message_or_doc, 'video') or hasattr(message_or_doc, 'document') or hasattr(message_or_doc, 'photo'):
+            # It's a Message object - extract info directly
+            file_metadata = get_file_metadata(message_or_doc)
+            if not file_metadata:
+                return "📁 Media File"
+            
+            file_name = file_metadata.get("file_name", "Unknown")
+            file_type = file_metadata.get("file_type", "file").title()
+            file_size = file_metadata.get("file_size")
+            duration = file_metadata.get("duration")
+            width = file_metadata.get("width")
+            height = file_metadata.get("height")
+            
+            # Extract track info from message text/caption
+            text_content = getattr(message_or_doc, 'text', '') or getattr(message_or_doc, 'caption', '')
+            track_info = extract_track_info(text_content)
+            track_url = track_info.get("track_url")
+            track_id = track_info.get("track_id")
+            
+            # Source info from message
+            chat_title = message_or_doc.chat.title if message_or_doc.chat else "Unknown Channel"
+            date = message_or_doc.date
+            
+        else:
+            # It's a dict - use directly
+            file_name = message_or_doc.get("file_name", "Unknown")
+            file_type = message_or_doc.get("file_type", "file").title()
+            file_size = message_or_doc.get("file_size")
+            duration = message_or_doc.get("duration")
+            width = message_or_doc.get("width")
+            height = message_or_doc.get("height")
+            track_url = message_or_doc.get("track_url")
+            track_id = message_or_doc.get("track_id")
+            chat_title = message_or_doc.get("chat_title", "Unknown Channel")
+            date = message_or_doc.get("date")
         
         caption_parts.append(f"🎵 **{file_name}**")
         caption_parts.append(f"📁 Type: {file_type}")
         
         # File size
-        file_size = file_doc.get("file_size")
         if file_size:
             size_mb = round(file_size / (1024 * 1024), 2)
             caption_parts.append(f"💾 Size: {size_mb} MB")
         
         # Duration for audio/video
-        duration = file_doc.get("duration")
         if duration:
             minutes = duration // 60
             seconds = duration % 60
             caption_parts.append(f"🕒 Duration: {minutes:02d}:{seconds:02d}")
         
         # Dimensions for video/photo
-        width = file_doc.get("width")
-        height = file_doc.get("height")
         if width and height:
             caption_parts.append(f"📐 Resolution: {width}x{height}")
         
         # Track information
-        track_url = file_doc.get("track_url")
-        track_id = file_doc.get("track_id")
-        
         if track_url:
-            # Determine platform from URL
-            if "spotify.com" in track_url:
-                caption_parts.append(f"🎵 [Spotify Track]({track_url})")
-            elif "jiosaavn.com" in track_url:
-                caption_parts.append(f"🎵 [JioSaavn Track]({track_url})")
-            elif "youtube.com" in track_url or "youtu.be" in track_url:
-                caption_parts.append(f"🎵 [YouTube Track]({track_url})")
-            elif "soundcloud.com" in track_url:
-                caption_parts.append(f"🎵 [SoundCloud Track]({track_url})")
-            else:
-                caption_parts.append(f"🔗 [Track Link]({track_url})")
-        
+            caption_parts.append(f"🔗 Track: {track_url}")
         if track_id:
-            caption_parts.append(f"🆔 Track ID: `{track_id}`")
+            caption_parts.append(f"🆔 ID: {track_id}")
         
-        # Source information
-        chat_title = file_doc.get("chat_title")
-        sender_username = file_doc.get("sender_username")
-        
-        if chat_title:
-            caption_parts.append(f"📍 Source: {chat_title}")
-        
-        if sender_username:
-            caption_parts.append(f"👤 Uploaded by: @{sender_username}")
+        # Source information  
+        caption_parts.append(f"📍 Source: {chat_title}")
         
         # Date
-        date = file_doc.get("date")
         if date:
-            try:
-                from datetime import datetime
-                dt = datetime.fromisoformat(date.replace('Z', '+00:00'))
-                formatted_date = dt.strftime("%Y-%m-%d %H:%M")
+            if hasattr(date, 'strftime'):
+                formatted_date = date.strftime("%Y-%m-%d")
                 caption_parts.append(f"📅 Date: {formatted_date}")
-            except:
-                pass
+            elif isinstance(date, str):
+                try:
+                    from datetime import datetime
+                    parsed_date = datetime.fromisoformat(date.replace('Z', '+00:00'))
+                    formatted_date = parsed_date.strftime("%Y-%m-%d")
+                    caption_parts.append(f"📅 Date: {formatted_date}")
+                except:
+                    pass
         
+        # Join all parts
         return "\n".join(caption_parts)
         
     except Exception as e:
         logger.error(f"Error formatting caption: {e}")
-        return f"📁 {file_doc.get('file_name', 'Unknown File')}"
+        return "📁 Media File"
 
 def format_duration(seconds: int) -> str:
     """Format duration in seconds to MM:SS format"""

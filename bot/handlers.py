@@ -394,7 +394,9 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
 ⏳ Searching for media files...
         """)
         
-        # Process messages by iterating backwards from the starting message
+        # Initialize tracking variables
+        total_messages = start_message_id  # Total messages in channel  
+        fetched_messages = 0
         processed = 0
         errors = 0
         current_msg_id = start_message_id
@@ -420,12 +422,16 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
                                 
                                 # Update progress every 10 files
                                 if processed % 10 == 0:
+                                    skipped_messages = (start_message_id - current_msg_id) - processed
+                                    fetched_messages = start_message_id - current_msg_id
                                     fancy_status = create_fancy_progress_status(
                                         processed=processed,
                                         errors=errors,
                                         current_msg_id=current_msg_id,
                                         chat_title=chat_title,
-                                        skipped=current_msg_id - start_message_id - processed
+                                        total_messages=start_message_id,
+                                        fetched_messages=fetched_messages,
+                                        skipped=skipped_messages
                                     )
                                     
                                     await status_msg.edit_text(f"```\n{fancy_status}\n```")
@@ -462,11 +468,15 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
 ❌ **Stopped by user**
             """)
         else:
+            total_fetched = start_message_id - current_msg_id
+            skipped_final = total_fetched - processed
             final_status = create_final_status(
                 processed=processed,
                 errors=errors,
                 chat_title=chat_title,
-                skipped=start_message_id - processed if start_message_id > processed else 0
+                total_messages=start_message_id,
+                fetched_messages=total_fetched,
+                skipped=skipped_final
             )
             await status_msg.edit_text(f"```\n{final_status}\n```")
             
@@ -483,15 +493,19 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
     finally:
         indexing_process["active"] = False
 
-def create_fancy_progress_status(processed: int, errors: int, current_msg_id: int, chat_title: str, skipped: int = 0) -> str:
+def create_fancy_progress_status(processed: int, errors: int, current_msg_id: int, chat_title: str, total_messages: int, fetched_messages: int, skipped: int = 0) -> str:
     """Create a fancy progress status display"""
     
-    # Calculate percentage based on processed files
-    percentage = min(int((processed / 100) * 100), 100) if processed <= 100 else 100
+    # Calculate percentage based on fetched vs total messages
+    percentage = int((fetched_messages / total_messages) * 100) if total_messages > 0 else 0
     
     status_text = f"""╔════❰ ɪɴᴅᴇxɪɴɢ sᴛᴀᴛᴜs  ❱═❍⊱❁
 ║╭━━━━━━━━━━━━━━━➣
 ║┣⪼𖨠 ᴄʜᴀɴɴᴇʟ ɴᴀᴍᴇ:  {chat_title}
+║┃
+║┣⪼𖨠 ᴛᴏᴛᴀʟ ᴍᴇssᴀɢᴇs:  {total_messages}
+║┃
+║┣⪼𖨠 ғᴇᴛᴄʜᴇᴅ ᴍᴇssᴀɢᴇs:  {fetched_messages}
 ║┃
 ║┣⪼𖨠 ɪɴᴅᴇxᴇᴅ ᴍᴇᴅɪᴀ:  {processed}
 ║┃
@@ -503,20 +517,24 @@ def create_fancy_progress_status(processed: int, errors: int, current_msg_id: in
 ║┃
 ║┣⪼𖨠 ᴄᴜʀʀᴇɴᴛ sᴛᴀᴛᴜs:  ɪɴᴅᴇxɪɴɢ
 ║┃
-║┣⪼𖨠 ᴘʀᴏɢʀᴇss:  {percentage}%
+║┣⪼𖨠 ᴘᴇʀᴄᴇɴᴛᴀɢᴇ:  {percentage}%
 ║╰━━━━━━━━━━━━━━━➣ 
 ╚════❰ ᴘʀᴏᴄᴇssɪɴɢ ❱══❍⊱❁"""
     
     return status_text
 
-def create_final_status(processed: int, errors: int, chat_title: str, skipped: int = 0) -> str:
+def create_final_status(processed: int, errors: int, chat_title: str, total_messages: int, fetched_messages: int, skipped: int = 0) -> str:
     """Create final completion status"""
     
     status_text = f"""╔════❰ ɪɴᴅᴇxɪɴɢ ᴄᴏᴍᴘʟᴇᴛᴇ  ❱═❍⊱❁
 ║╭━━━━━━━━━━━━━━━➣
 ║┣⪼𖨠 ᴄʜᴀɴɴᴇʟ ɴᴀᴍᴇ:  {chat_title}
 ║┃
-║┣⪼𖨠 ᴛᴏᴛᴀʟ ɪɴᴅᴇxᴇᴅ:  {processed}
+║┣⪼𖨠 ᴛᴏᴛᴀʟ ᴍᴇssᴀɢᴇs:  {total_messages}
+║┃
+║┣⪼𖨠 ғᴇᴛᴄʜᴇᴅ ᴍᴇssᴀɢᴇs:  {fetched_messages}
+║┃
+║┣⪼𖨠 ɪɴᴅᴇxᴇᴅ ᴍᴇᴅɪᴀ:  {processed}
 ║┃
 ║┣⪼𖨠 ᴇʀʀᴏʀ ᴄᴏᴜɴᴛ:  {errors}
 ║┃
@@ -524,7 +542,7 @@ def create_final_status(processed: int, errors: int, chat_title: str, skipped: i
 ║┃
 ║┣⪼𖨠 ᴄᴜʀʀᴇɴᴛ sᴛᴀᴛᴜs:  ᴄᴏᴍᴘʟᴇᴛᴇᴅ
 ║┃
-║┣⪼𖨠 ᴘʀᴏɢʀᴇss:  100%
+║┣⪼𖨠 ᴘᴇʀᴄᴇɴᴛᴀɢᴇ:  100%
 ║╰━━━━━━━━━━━━━━━➣ 
 ╚════❰ ғɪɴɪsʜᴇᴅ ❱══❍⊱❁
 
