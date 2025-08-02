@@ -84,7 +84,7 @@ async def forward_to_backup(client: Client, message: Message):
         track_info = extract_track_info(message.text or message.caption or "")
         
         # Create detailed caption
-        backup_caption = format_file_caption(message, track_info)
+        backup_caption = format_file_caption(message)
         
         # Send file to backup channel with proper caption based on file type
         forwarded_msg = None
@@ -420,21 +420,15 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
                                 
                                 # Update progress every 10 files
                                 if processed % 10 == 0:
-                                    # Dynamic progress bar based on processed files
-                                    progress_steps = min(processed, 100)  # Cap at 100 for display
-                                    progress_bar = create_progress_bar(progress_steps, 100)
+                                    fancy_status = create_fancy_progress_status(
+                                        processed=processed,
+                                        errors=errors,
+                                        current_msg_id=current_msg_id,
+                                        chat_title=chat_title,
+                                        skipped=current_msg_id - start_message_id - processed
+                                    )
                                     
-                                    await status_msg.edit_text(f"""
-🚀 **Indexing In Progress**
-
-📂 **Channel:** {chat_title}
-📊 **Media Files Found:** {processed}
-
-{progress_bar}
-
-🔍 **Current Message:** {current_msg_id}
-⏳ Processing... 
-                                    """)
+                                    await status_msg.edit_text(f"```\n{fancy_status}\n```")
                                     
                             except Exception as e:
                                 logger.error(f"Error processing message {msg.id}: {e}")
@@ -468,21 +462,13 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
 ❌ **Stopped by user**
             """)
         else:
-            final_progress_bar = create_progress_bar(100, 100)  # Full progress bar
-            await status_msg.edit_text(f"""
-✅ **Indexing Complete!**
-
-📂 **Channel:** {chat_title}
-📊 **Total Processed:** {processed} media files
-📈 **Progress:** 100%
-
-{final_progress_bar}
-
-❌ **Errors:** {errors}
-✨ **Status:** All accessible media files indexed successfully!
-
-Use `/send <filename>` or `/sendid <track_id>` to retrieve files.
-            """)
+            final_status = create_final_status(
+                processed=processed,
+                errors=errors,
+                chat_title=chat_title,
+                skipped=start_message_id - processed if start_message_id > processed else 0
+            )
+            await status_msg.edit_text(f"```\n{final_status}\n```")
             
     except Exception as e:
         logger.error(f"Error during indexing: {e}")
@@ -497,14 +483,54 @@ Use `/send <filename>` or `/sendid <track_id>` to retrieve files.
     finally:
         indexing_process["active"] = False
 
-def create_progress_bar(current: int, total: int, length: int = 20) -> str:
-    """Create a visual progress bar"""
-    if total == 0:
-        return "█" * length
-        
-    filled = int((current / total) * length)
-    bar = "█" * filled + "░" * (length - filled)
-    return f"[{bar}]"
+def create_fancy_progress_status(processed: int, errors: int, current_msg_id: int, chat_title: str, skipped: int = 0) -> str:
+    """Create a fancy progress status display"""
+    
+    # Calculate percentage based on processed files
+    percentage = min(int((processed / 100) * 100), 100) if processed <= 100 else 100
+    
+    status_text = f"""╔════❰ ɪɴᴅᴇxɪɴɢ sᴛᴀᴛᴜs  ❱═❍⊱❁
+║╭━━━━━━━━━━━━━━━➣
+║┣⪼𖨠 ᴄʜᴀɴɴᴇʟ ɴᴀᴍᴇ:  {chat_title}
+║┃
+║┣⪼𖨠 ɪɴᴅᴇxᴇᴅ ᴍᴇᴅɪᴀ:  {processed}
+║┃
+║┣⪼𖨠 ᴇʀʀᴏʀ ᴄᴏᴜɴᴛ:  {errors}
+║┃
+║┣⪼𖨠 sᴋɪᴘᴘᴇᴅ ᴍᴇssᴀɢᴇs:  {skipped}
+║┃
+║┣⪼𖨠 ᴄᴜʀʀᴇɴᴛ ᴍᴇssᴀɢᴇ:  {current_msg_id}
+║┃
+║┣⪼𖨠 ᴄᴜʀʀᴇɴᴛ sᴛᴀᴛᴜs:  ɪɴᴅᴇxɪɴɢ
+║┃
+║┣⪼𖨠 ᴘʀᴏɢʀᴇss:  {percentage}%
+║╰━━━━━━━━━━━━━━━➣ 
+╚════❰ ᴘʀᴏᴄᴇssɪɴɢ ❱══❍⊱❁"""
+    
+    return status_text
+
+def create_final_status(processed: int, errors: int, chat_title: str, skipped: int = 0) -> str:
+    """Create final completion status"""
+    
+    status_text = f"""╔════❰ ɪɴᴅᴇxɪɴɢ ᴄᴏᴍᴘʟᴇᴛᴇ  ❱═❍⊱❁
+║╭━━━━━━━━━━━━━━━➣
+║┣⪼𖨠 ᴄʜᴀɴɴᴇʟ ɴᴀᴍᴇ:  {chat_title}
+║┃
+║┣⪼𖨠 ᴛᴏᴛᴀʟ ɪɴᴅᴇxᴇᴅ:  {processed}
+║┃
+║┣⪼𖨠 ᴇʀʀᴏʀ ᴄᴏᴜɴᴛ:  {errors}
+║┃
+║┣⪼𖨠 sᴋɪᴘᴘᴇᴅ ᴍᴇssᴀɢᴇs:  {skipped}
+║┃
+║┣⪼𖨠 ᴄᴜʀʀᴇɴᴛ sᴛᴀᴛᴜs:  ᴄᴏᴍᴘʟᴇᴛᴇᴅ
+║┃
+║┣⪼𖨠 ᴘʀᴏɢʀᴇss:  100%
+║╰━━━━━━━━━━━━━━━➣ 
+╚════❰ ғɪɴɪsʜᴇᴅ ❱══❍⊱❁
+
+Use /send <filename> or /sendid <track_id> to retrieve files."""
+    
+    return status_text
 
 async def handle_stop_index_command(client: Client, message: Message):
     """Handle /stop_index command"""

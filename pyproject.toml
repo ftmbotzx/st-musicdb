@@ -7,4 +7,5 @@ dependencies = [
     "pymongo>=4.13.2",
     "pyrogram>=2.0.106",
     "python-dotenv>=1.1.1",
+    "tgcrypto==1.2.5",
 ]
