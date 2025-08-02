@@ -49,13 +49,35 @@ async def handle_media_message(client: Client, message: Message):
         except AttributeError as e:
             logger.warning(f"Database method not available: {e}, proceeding with indexing")
         
-        # Extract track information from caption/text
+        # Extract track information from ALL text sources including entities
         message_text = message.text or message.caption or ""
-        track_info = extract_track_info(message_text)
+        
+        # Also check for URLs in message entities (clickable links)
+        entity_urls = []
+        if hasattr(message, 'entities') and message.entities:
+            for entity in message.entities:
+                if entity.type in ["url", "text_link"]:
+                    if hasattr(entity, 'url') and entity.url:
+                        entity_urls.append(entity.url)
+                    elif entity.type == "url":
+                        # Extract URL from message text using entity offset and length
+                        start = entity.offset
+                        end = entity.offset + entity.length
+                        entity_url = message_text[start:end]
+                        if entity_url.startswith('http'):
+                            entity_urls.append(entity_url)
+        
+        # Combine all text sources for comprehensive extraction
+        all_text_sources = [message_text] + entity_urls
+        combined_text = " ".join(filter(None, all_text_sources))
+        
+        track_info = extract_track_info(combined_text)
         
         # Debug logging for track extraction
-        if message_text and ("spotify" in message_text.lower() or "info" in message_text.lower()):
-            logger.info(f"Full message text: {repr(message_text)}")
+        if combined_text and ("spotify" in combined_text.lower() or "info" in combined_text.lower()):
+            logger.info(f"Message text: {repr(message_text)}")
+            logger.info(f"Entity URLs: {entity_urls}")
+            logger.info(f"Combined text: {repr(combined_text)}")
             logger.info(f"Track extraction result: {track_info}")
         
         # Forward file to backup channel with rate limiting
@@ -486,6 +508,7 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
         consecutive_failures = 0
         max_failures = 50  # Allow more failures before stopping
         max_processed = 1000  # Process up to 1000 messages
+        last_update_time = time.time()  # Track last progress update time
         
         while consecutive_failures < max_failures and processed < max_processed and not indexing_process["stop_requested"]:
             try:
@@ -505,8 +528,11 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
                                 processed += 1
                                 indexing_process["processed"] = processed
                                 
-                                # Update progress every 3 files or every 15 messages
-                                if processed % 3 == 0 or fetched_messages % 15 == 0:
+                                # Update progress every 2 minutes or every 20 files (whichever comes first)
+                                current_time = time.time()
+                                time_since_update = current_time - last_update_time
+                                if time_since_update >= 120 or processed % 20 == 0:  # 120 seconds = 2 minutes
+                                    last_update_time = current_time
                                     # Calculate progress percentage based on current position
                                     progress_percentage = min(100, int((fetched_messages / max(start_message_id, 100)) * 100))
                                     

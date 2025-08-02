@@ -88,40 +88,64 @@ def extract_track_info(caption: str) -> Dict:
             "apple_music": r"https?://music\.apple\.com/[^/]+/album/[^/]+/([0-9]+)"
         }
         
-        # Clean caption text and handle special characters extensively
-        clean_caption = caption
-        # Remove various types of special characters and invisible chars
-        special_chars = ['­', '\u00ad', '\u200b', '\u200c', '\u200d', '\ufeff']
-        for char in special_chars:
-            clean_caption = clean_caption.replace(char, '')
-        
         logger.info(f"Original caption: {repr(caption)}")
-        logger.info(f"Cleaned caption: {repr(clean_caption)}")
         
-        # Multiple URL extraction strategies
+        # Try multiple extraction approaches without losing URLs
         urls = []
         
-        # Strategy 1: Look for all HTTP URLs
-        general_urls = re.findall(r'https?://[^\s\)\n]+', clean_caption, re.IGNORECASE)
+        # Strategy 1: Direct regex on original text (with special chars)
+        spotify_pattern = r'https?://open\.spotify\.com/track/[a-zA-Z0-9]+'
+        original_matches = re.findall(spotify_pattern, caption)
+        urls.extend(original_matches)
+        
+        # Strategy 2: Clean some special chars but preserve structure
+        light_clean = caption.replace('­', '').replace('\u00ad', '')
+        light_matches = re.findall(spotify_pattern, light_clean)
+        urls.extend(light_matches)
+        
+        # Strategy 3: Look for URLs after various info patterns
+        info_patterns = [
+            r'info[^\n]*?(https?://[^\s\)\n]+)',
+            r'Info[^\n]*?(https?://[^\s\)\n]+)',
+            r'INFO[^\n]*?(https?://[^\s\)\n]+)',
+            r'\|\s*info[^\n]*?(https?://[^\s\)\n]+)',
+        ]
+        
+        for pattern in info_patterns:
+            matches = re.findall(pattern, caption, re.IGNORECASE)
+            urls.extend(matches)
+            matches_clean = re.findall(pattern, light_clean, re.IGNORECASE)
+            urls.extend(matches_clean)
+        
+        # Strategy 4: General URL extraction
+        general_urls = re.findall(r'https?://[^\s\)\n]+', caption)
         urls.extend(general_urls)
+        general_urls_clean = re.findall(r'https?://[^\s\)\n]+', light_clean)
+        urls.extend(general_urls_clean)
         
-        # Strategy 2: Look specifically after "info" keyword
-        info_matches = re.findall(r'info[^\n]*?(https?://[^\s\)\n]+)', clean_caption, re.IGNORECASE)
-        urls.extend(info_matches)
-        
-        # Strategy 3: Extract Spotify URLs specifically
-        spotify_matches = re.findall(r'(https?://open\.spotify\.com/track/[a-zA-Z0-9]+)', clean_caption)
-        urls.extend(spotify_matches)
-        
-        # Strategy 4: Split by words and look for URLs
-        words = clean_caption.split()
+        # Strategy 5: Split by whitespace and check each part
+        words = caption.split()
         for word in words:
-            if word.startswith('http') and 'spotify.com/track/' in word:
-                urls.append(word)
+            # Remove common trailing chars and check
+            clean_word = word.rstrip('.,!?;)')
+            if 'spotify.com/track/' in clean_word:
+                urls.append(clean_word)
         
         # Remove duplicates while preserving order
-        unique_urls = list(dict.fromkeys(urls))
+        unique_urls = list(dict.fromkeys([url for url in urls if url]))
         logger.info(f"Found URLs: {unique_urls}")
+        
+        # Also check for partial URLs that might be split
+        if not unique_urls and 'spotify.com' in caption:
+            logger.warning(f"Found 'spotify.com' in caption but no complete URLs: {repr(caption)}")
+            # Try to reconstruct URL if it's fragmented
+            if 'open.spotify.com/track/' in caption:
+                # Extract potential track ID after the pattern
+                track_match = re.search(r'open\.spotify\.com/track/([a-zA-Z0-9]+)', caption)
+                if track_match:
+                    reconstructed_url = f"https://open.spotify.com/track/{track_match.group(1)}"
+                    unique_urls.append(reconstructed_url)
+                    logger.info(f"Reconstructed URL: {reconstructed_url}")
         
         for url in unique_urls:
             for platform, pattern in patterns.items():
