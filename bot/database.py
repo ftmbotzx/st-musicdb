@@ -285,6 +285,73 @@ class DatabaseManager:
             logger.error(f"Error finding file by backup ID: {e}")
             return None
     
+    def get_last_indexed_message_id(self, chat_id: int) -> int:
+        """Get the last indexed message ID for a specific chat"""
+        try:
+            if self.collection is None:
+                logger.warning("Database not connected")
+                return 1
+            
+            # Get the highest message_id for this chat
+            result = self.collection.find_one(
+                {"chat_id": chat_id, "is_deleted": False},
+                sort=[("message_id", -1)]
+            )
+            
+            if result and result.get("message_id"):
+                return int(result["message_id"])
+            
+            return 1  # Start from message 1 if no previous messages
+            
+        except Exception as e:
+            logger.error(f"Error getting last indexed message ID: {e}")
+            return 1
+    
+    def update_last_indexed_message_id(self, chat_id: int, message_id: int):
+        """Update the last indexed message ID for a chat"""
+        try:
+            if self.db is None:
+                logger.warning("Database not connected")
+                return
+            
+            # Store in a separate collection for indexing progress
+            progress_collection = self.db.indexing_progress
+            
+            progress_collection.update_one(
+                {"chat_id": chat_id},
+                {
+                    "$set": {
+                        "chat_id": chat_id,
+                        "last_indexed_message_id": message_id,
+                        "updated_at": __import__('datetime').datetime.now().isoformat()
+                    }
+                },
+                upsert=True
+            )
+            
+        except Exception as e:
+            logger.error(f"Error updating last indexed message ID: {e}")
+    
+    def get_stored_last_indexed_message_id(self, chat_id: int) -> int:
+        """Get stored last indexed message ID from progress collection"""
+        try:
+            if self.db is None:
+                logger.warning("Database not connected")
+                return 1
+            
+            progress_collection = self.db.indexing_progress
+            result = progress_collection.find_one({"chat_id": chat_id})
+            
+            if result and result.get("last_indexed_message_id"):
+                return int(result["last_indexed_message_id"])
+            
+            # Fallback to checking actual files
+            return self.get_last_indexed_message_id(chat_id)
+            
+        except Exception as e:
+            logger.error(f"Error getting stored last indexed message ID: {e}")
+            return 1
+    
     def close_connection(self):
         """Close MongoDB connection"""
         if self.client:
