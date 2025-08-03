@@ -74,7 +74,7 @@ def get_file_metadata(message: Message) -> Optional[Dict]:
         return None
 
 def extract_track_info(caption: str) -> Dict:
-    """Extract track URL and ID from caption text links"""
+    """Extract track URL, ID, title, and artist from caption text"""
     track_info = {}
     
     if not caption:
@@ -288,17 +288,48 @@ def extract_track_info(caption: str) -> Dict:
             if track_info:
                 break
         
+        # Extract title and artist from caption lines
+        caption_lines = caption.split('\n')
+        
+        # Title from first line (clean it from extra characters)
+        if len(caption_lines) > 0:
+            title_line = caption_lines[0].strip()
+            # Remove common prefixes and clean the title
+            title_line = re.sub(r'^[🎵🎶🎧]*\s*', '', title_line)  # Remove music emojis
+            title_line = re.sub(r'\s*[\|\-\–\—]\s*.*$', '', title_line)  # Remove everything after | - – —
+            if title_line:
+                track_info["title"] = title_line.strip()
+        
+        # Artist from second line (if exists)
+        if len(caption_lines) > 1:
+            artist_line = caption_lines[1].strip()
+            # Remove common prefixes and clean the artist
+            artist_line = re.sub(r'^[👤🎤🎙️]*\s*', '', artist_line)  # Remove person/mic emojis
+            artist_line = re.sub(r'\s*[\|\-\–\—]\s*.*$', '', artist_line)  # Remove everything after separators
+            if artist_line and not any(x in artist_line.lower() for x in ['http', 'www', '.com', 'info']):
+                track_info["artist"] = artist_line.strip()
+        
         return track_info
         
     except Exception as e:
         logger.error(f"Error extracting track info: {e}")
         return {}
 
-def format_file_caption(message_or_doc, include_track_id=False, track_info_override=None) -> str:
-    """Format a detailed caption for file"""
+def generate_minimal_caption(entry) -> str:
+    """Generate minimal caption with just title, artist, and track ID"""
+    title = entry.get('title', 'Unknown Title')
+    artist = entry.get('artist', 'Unknown Artist') 
+    track_id = entry.get('track_id', 'N/A')
+    
+    return (
+        f"🎵 {title}\n"
+        f"👤 {artist}\n"
+        f"🆔 {track_id}"
+    )
+
+def format_file_caption(message_or_doc, include_track_id=False, track_info_override=None, minimal_format=False) -> str:
+    """Format a caption for file - minimal or detailed format"""
     try:
-        caption_parts = []
-        
         # Check if it's a Message object or a dict
         if hasattr(message_or_doc, 'audio') or hasattr(message_or_doc, 'video') or hasattr(message_or_doc, 'document') or hasattr(message_or_doc, 'photo'):
             # It's a Message object - extract info directly
@@ -306,19 +337,23 @@ def format_file_caption(message_or_doc, include_track_id=False, track_info_overr
             if not file_metadata:
                 return "📁 Media File"
             
-            file_name = file_metadata.get("file_name", "Unknown")
-            file_type = file_metadata.get("file_type", "file").title()
-            file_size = file_metadata.get("file_size")
-            duration = file_metadata.get("duration")
-            width = file_metadata.get("width")
-            height = file_metadata.get("height")
-            
             # Extract track info from message text/caption or use override
             if track_info_override:
                 track_info = track_info_override
             else:
                 text_content = getattr(message_or_doc, 'text', '') or getattr(message_or_doc, 'caption', '')
                 track_info = extract_track_info(text_content)
+            
+            # For minimal format, return immediately
+            if minimal_format:
+                return generate_minimal_caption(track_info)
+            
+            file_name = file_metadata.get("file_name", "Unknown")
+            file_type = file_metadata.get("file_type", "file").title()
+            file_size = file_metadata.get("file_size")
+            duration = file_metadata.get("duration")
+            width = file_metadata.get("width")
+            height = file_metadata.get("height")
             
             track_url = track_info.get("track_url")
             track_id = track_info.get("track_id")
@@ -329,6 +364,9 @@ def format_file_caption(message_or_doc, include_track_id=False, track_info_overr
             
         else:
             # It's a dict - use directly
+            if minimal_format:
+                return generate_minimal_caption(message_or_doc)
+                
             file_name = message_or_doc.get("file_name", "Unknown")
             file_type = message_or_doc.get("file_type", "file").title()
             file_size = message_or_doc.get("file_size")
@@ -346,6 +384,9 @@ def format_file_caption(message_or_doc, include_track_id=False, track_info_overr
             
             chat_title = message_or_doc.get("chat_title", "Unknown Channel")
             date = message_or_doc.get("date")
+        
+        # Build detailed caption
+        caption_parts = []
         
         # Track ID prominently at the top if requested (for backup channel)
         if include_track_id and track_id:

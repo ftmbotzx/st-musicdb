@@ -54,6 +54,8 @@ class DatabaseManager:
             self.collection.create_index("file_name")
             self.collection.create_index("track_id")
             self.collection.create_index("track_url")
+            self.collection.create_index("title")
+            self.collection.create_index("artist")
             self.collection.create_index("chat_id")
             self.collection.create_index("sender_id")
             self.collection.create_index("date")

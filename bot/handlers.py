@@ -223,8 +223,8 @@ async def handle_media_message(client: Client, message: Message):
                 "thumbnail": message.document.thumbs[0].file_id
             })
         
-        # Add rate limiting for media processing
-        await asyncio.sleep(0.3)  # Small delay to prevent rate limits
+        # Add rate limiting for media processing  
+        await asyncio.sleep(0.1)  # Small delay to prevent rate limits
         
         # Prepare comprehensive document for MongoDB with TRACK INFORMATION
         document = {
@@ -253,6 +253,8 @@ async def handle_media_message(client: Client, message: Message):
             "track_url": track_info.get("track_url") if track_info else None,
             "track_id": track_info.get("track_id") if track_info else None,
             "platform": track_info.get("platform") if track_info else None,
+            "title": track_info.get("title") if track_info else None,
+            "artist": track_info.get("artist") if track_info else None,
             **audio_metadata  # Include performer, title, thumbnail if available
         }
         
@@ -291,9 +293,8 @@ async def forward_to_backup(client: Client, message: Message, track_info: dict =
             except AttributeError:
                 logger.debug("Backup check method not available, proceeding with forward")
         
-        # Create detailed caption with track ID prominently displayed
-        # Pass track_info to ensure track ID appears in backup caption
-        backup_caption = format_file_caption(message, include_track_id=True, track_info_override=track_info)
+        # Create minimal caption with title, artist, and track ID
+        backup_caption = format_file_caption(message, minimal_format=True, track_info_override=track_info)
         
         # Send file to backup channel with proper caption based on file type
         forwarded_msg = None
@@ -669,9 +670,14 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
         current_msg_id = start_message_id  # Start from provided start message ID
         consecutive_failures = 0
         max_failures = 50  # Allow more failures before stopping
-        max_processed = 1000  # Process up to 1000 messages
+        # Removed max_processed limit to allow unlimited processing
         last_update_time = time.time()  # Track last progress update time
         last_saved_progress = start_message_id  # Track last saved progress
+        start_time = time.time()  # Track start time for speed calculation
+        
+        # Rate limiting: 20 messages per minute = 1 message every 3 seconds
+        rate_limit_delay = 3.0  # seconds between messages
+        last_message_time = 0
         
         await status_msg.edit_text(f"""
 🚀 **Indexing Process Started**
@@ -683,7 +689,7 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
 ⏳ Searching for media files...
         """)
         
-        while consecutive_failures < max_failures and processed < max_processed and current_msg_id <= final_message_id and not indexing_process["stop_requested"]:
+        while consecutive_failures < max_failures and current_msg_id <= final_message_id and not indexing_process["stop_requested"]:
             try:
                 # Try to get the specific message
                 try:
@@ -697,9 +703,18 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
                     for msg in msg_list:
                         if msg and (msg.audio or msg.video or msg.document or msg.photo):
                             try:
+                                # Apply rate limiting: 20 messages per minute (3 seconds between messages)
+                                current_time = time.time()
+                                time_since_last = current_time - last_message_time
+                                if time_since_last < rate_limit_delay:
+                                    sleep_time = rate_limit_delay - time_since_last
+                                    logger.info(f"Rate limiting: sleeping for {sleep_time:.1f} seconds")
+                                    await asyncio.sleep(sleep_time)
+                                
                                 await handle_media_message(client, msg)
                                 processed += 1
                                 indexing_process["processed"] = processed
+                                last_message_time = time.time()
                                 
                                 # Update progress every 2 minutes or every 20 files (whichever comes first)
                                 current_time = time.time()
@@ -709,7 +724,7 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
                                     # Calculate progress percentage based on current position
                                     progress_percentage = min(100, int(((current_msg_id - start_message_id + 1) / total_messages) * 100))
                                     
-                                    # Create fancy status with proper progress bar
+                                    # Create fancy status with proper progress bar and speed
                                     fancy_status = create_fancy_progress_status(
                                         processed=processed,
                                         errors=errors,
@@ -718,7 +733,9 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
                                         total_messages=total_messages,
                                         fetched_messages=fetched_messages,
                                         skipped=fetched_messages - processed,
-                                        percentage=progress_percentage
+                                        percentage=progress_percentage,
+                                        start_time=start_time,
+                                        start_msg_id=start_message_id
                                     )
                                     
                                     await status_msg.edit_text(f"```\n{fancy_status}\n```")
@@ -794,12 +811,24 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
     finally:
         indexing_process["active"] = False
 
-def create_fancy_progress_status(processed: int, errors: int, current_msg_id: int, chat_title: str, total_messages: int, fetched_messages: int, skipped: int = 0, percentage: int = 0) -> str:
-    """Create a fancy progress status display"""
+def create_fancy_progress_status(processed: int, errors: int, current_msg_id: int, chat_title: str, total_messages: int, fetched_messages: int, skipped: int = 0, percentage: int = 0, start_time: float = None, start_msg_id: int = None) -> str:
+    """Create a fancy progress status display with speed calculation"""
     
-    # Use provided percentage or calculate based on fetched vs total messages
-    if percentage == 0:
+    # Calculate correct percentage based on message progress
+    if start_msg_id:
+        progress_made = current_msg_id - start_msg_id + 1
+        percentage = int((progress_made / total_messages) * 100) if total_messages > 0 else 0
+    elif percentage == 0:
         percentage = int((fetched_messages / total_messages) * 100) if total_messages > 0 else 0
+    
+    # Calculate speed
+    speed_text = "Calculating..."
+    if start_time and processed > 0:
+        elapsed_time = time.time() - start_time
+        if elapsed_time > 0:
+            files_per_sec = processed / elapsed_time
+            files_per_min = files_per_sec * 60
+            speed_text = f"{files_per_min:.1f} files/min"
     
     status_text = f"""╔════❰ ɪɴᴅᴇxɪɴɢ sᴛᴀᴛᴜs  ❱═❍⊱❁
 ║╭━━━━━━━━━━━━━━━➣
@@ -817,7 +846,7 @@ def create_fancy_progress_status(processed: int, errors: int, current_msg_id: in
 ║┃
 ║┣⪼𖨠 ᴄᴜʀʀᴇɴᴛ ᴍᴇssᴀɢᴇ:  {current_msg_id}
 ║┃
-║┣⪼𖨠 ᴄᴜʀʀᴇɴᴛ sᴛᴀᴛᴜs:  ɪɴᴅᴇxɪɴɢ
+║┣⪼𖨠 ᴘʀᴏᴄᴇssɪɴɢ sᴘᴇᴇᴅ:  {speed_text}
 ║┃
 ║┣⪼𖨠 ᴘᴇʀᴄᴇɴᴛᴀɢᴇ:  {percentage}%
 ║╰━━━━━━━━━━━━━━━➣ 
