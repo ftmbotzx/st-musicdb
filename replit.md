@@ -4,19 +4,21 @@
 
 This is a fully functional Telegram bot designed to automatically index and backup media files shared in Telegram chats. The bot monitors incoming media messages (audio, video, documents, photos), extracts metadata and track information, stores the data in MongoDB, and forwards files to a backup channel for preservation. It's built using the Pyrogram library for Telegram API integration and MongoDB for data persistence.
 
-**Current Status: ✅ ENHANCED WITH AUDIO METADATA PRIORITY - v2.9 (2025-08-03)**
-- **FIXED**: Artist extraction now prioritizes audio file metadata over URL-extracted information
-- **ENHANCED**: Caption generation uses `message.audio.performer` and `message.audio.title` for accurate track info
-- **IMPROVED**: Backup channel captions now display actual artist names (e.g., "Dany Ome, Kevincito El 13" instead of "Unknown Artist")
-- **UPDATED**: File metadata extraction includes performer, title, and thumbnail from audio files
-- Previous v2.8 features maintained:
-  - Interactive skip configuration with multiple options (number, `0`/`no`, `auto`)
-  - Smart first media detection functionality
-  - User-friendly prompts with clear examples and instructions
-  - Minimal caption format (Title, Artist, Track ID only)
-  - Enhanced MongoDB schema with title and artist fields
-  - Progress bar with speed calculation in files/min
-  - Unlimited message processing with proper rate limiting
+**Current Status: ✅ COMPLETE WITH TIME ESTIMATION - v3.0 (2025-08-03)**
+- **ENHANCED**: Complete progress tracking with real-time estimates and completion dates
+- **IMPLEMENTED**: Full rate limiting at exactly 20 messages per minute (3-second intervals)
+- **ADDED**: Real-time speed calculation (files/min), estimated time remaining, and completion date/time
+- **IMPROVED**: Enhanced progress display showing ETA and completion estimates
+- **MAINTAINED**: Audio metadata priority for accurate artist/title extraction
+- **CONFIRMED**: All features working together seamlessly:
+  - ✅ 20 msg/min rate limiting with 3-second delays
+  - ✅ Real speed calculation in files/min
+  - ✅ Estimated time remaining (e.g., "2h 45m" or "15m 30s")
+  - ✅ Completion date/time (e.g., "14:30 03/08")
+  - ✅ Interactive skip configuration (number, `0`/`no`, `auto`)
+  - ✅ Audio metadata extraction for accurate captions
+  - ✅ Minimal backup captions (🎵 Title, 👤 Artist, 🆔 Track ID)
+  - ✅ Progress bar with percentage, speed, and time estimates
 - Previous features maintained:
   - Link extraction working perfectly with both \u2063 and \u00ad characters
   - Advanced \u2063 character detection in "info" sections for embedded URL extraction

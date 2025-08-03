@@ -814,14 +814,40 @@ def create_fancy_progress_status(processed: int, errors: int, current_msg_id: in
     elif percentage == 0:
         percentage = int((fetched_messages / total_messages) * 100) if total_messages > 0 else 0
     
-    # Calculate speed
+    # Calculate speed and time estimates
     speed_text = "Calculating..."
+    eta_text = "Calculating..."
+    completion_date = "Calculating..."
+    
     if start_time and processed > 0:
         elapsed_time = time.time() - start_time
         if elapsed_time > 0:
             files_per_sec = processed / elapsed_time
             files_per_min = files_per_sec * 60
             speed_text = f"{files_per_min:.1f} files/min"
+            
+            # Calculate estimated time remaining
+            if start_msg_id and total_messages > 0:
+                progress_made = current_msg_id - start_msg_id + 1
+                remaining_messages = total_messages - progress_made
+                
+                if files_per_sec > 0:
+                    # Estimate based on current processing speed
+                    estimated_files_remaining = remaining_messages * (processed / progress_made)
+                    eta_seconds = estimated_files_remaining / files_per_sec
+                    
+                    # Format ETA
+                    if eta_seconds < 3600:  # Less than 1 hour
+                        eta_text = f"{int(eta_seconds // 60)}m {int(eta_seconds % 60)}s"
+                    else:  # More than 1 hour
+                        hours = int(eta_seconds // 3600)
+                        minutes = int((eta_seconds % 3600) // 60)
+                        eta_text = f"{hours}h {minutes}m"
+                    
+                    # Calculate completion date/time
+                    from datetime import datetime, timedelta
+                    completion_time = datetime.now() + timedelta(seconds=eta_seconds)
+                    completion_date = completion_time.strftime("%H:%M %d/%m")
     
     status_text = f"""╔════❰ ɪɴᴅᴇxɪɴɢ sᴛᴀᴛᴜs  ❱═❍⊱❁
 ║╭━━━━━━━━━━━━━━━➣
@@ -840,6 +866,10 @@ def create_fancy_progress_status(processed: int, errors: int, current_msg_id: in
 ║┣⪼𖨠 ᴄᴜʀʀᴇɴᴛ ᴍᴇssᴀɢᴇ:  {current_msg_id}
 ║┃
 ║┣⪼𖨠 ᴘʀᴏᴄᴇssɪɴɢ sᴘᴇᴇᴅ:  {speed_text}
+║┃
+║┣⪼𖨠 ᴇsᴛɪᴍᴀᴛᴇᴅ ᴛɪᴍᴇ:  {eta_text}
+║┃
+║┣⪼𖨠 ᴄᴏᴍᴘʟᴇᴛɪᴏɴ ᴅᴀᴛᴇ:  {completion_date}
 ║┃
 ║┣⪼𖨠 ᴘᴇʀᴄᴇɴᴛᴀɢᴇ:  {percentage}%
 ║╰━━━━━━━━━━━━━━━➣ 
