@@ -19,7 +19,10 @@ def get_file_metadata(message: Message) -> Optional[Dict]:
                 "file_type": "audio",
                 "mime_type": message.audio.mime_type,
                 "file_size": message.audio.file_size,
-                "duration": message.audio.duration
+                "duration": message.audio.duration,
+                "performer": message.audio.performer,  # Artist information from metadata
+                "title": message.audio.title,  # Title information from metadata
+                "thumbnail": message.audio.thumbs[0].file_id if message.audio.thumbs else None
             }
             
         elif message.video:
@@ -315,10 +318,26 @@ def extract_track_info(caption: str) -> Dict:
         logger.error(f"Error extracting track info: {e}")
         return {}
 
-def generate_minimal_caption(entry) -> str:
+def generate_minimal_caption(entry, file_metadata=None) -> str:
     """Generate minimal caption with just title, artist, and track ID"""
-    title = entry.get('title', 'Unknown Title')
-    artist = entry.get('artist', 'Unknown Artist') 
+    
+    # Prioritize audio metadata over track info from URL extraction
+    title = "Unknown Title"
+    artist = "Unknown Artist"
+    
+    # Try to get title and artist from audio file metadata first
+    if file_metadata:
+        if file_metadata.get('title'):
+            title = file_metadata.get('title')
+        if file_metadata.get('performer'):
+            artist = file_metadata.get('performer')
+    
+    # Fallback to track info from URL extraction if no metadata available
+    if title == "Unknown Title" and entry.get('title'):
+        title = entry.get('title')
+    if artist == "Unknown Artist" and entry.get('artist'):
+        artist = entry.get('artist')
+    
     track_id = entry.get('track_id', 'N/A')
     
     return (
@@ -346,7 +365,7 @@ def format_file_caption(message_or_doc, include_track_id=False, track_info_overr
             
             # For minimal format, return immediately
             if minimal_format:
-                return generate_minimal_caption(track_info)
+                return generate_minimal_caption(track_info, file_metadata)
             
             file_name = file_metadata.get("file_name", "Unknown")
             file_type = file_metadata.get("file_type", "file").title()
@@ -365,7 +384,7 @@ def format_file_caption(message_or_doc, include_track_id=False, track_info_overr
         else:
             # It's a dict - use directly
             if minimal_format:
-                return generate_minimal_caption(message_or_doc)
+                return generate_minimal_caption(message_or_doc, message_or_doc)
                 
             file_name = message_or_doc.get("file_name", "Unknown")
             file_type = message_or_doc.get("file_type", "file").title()

@@ -4,21 +4,19 @@
 
 This is a fully functional Telegram bot designed to automatically index and backup media files shared in Telegram chats. The bot monitors incoming media messages (audio, video, documents, photos), extracts metadata and track information, stores the data in MongoDB, and forwards files to a backup channel for preservation. It's built using the Pyrogram library for Telegram API integration and MongoDB for data persistence.
 
-**Current Status: ✅ ENHANCED WITH SKIP CONFIGURATION - v2.8 (2025-08-03)**
-- Bot now asks for skip message configuration when message links or forwarded messages are received
-- **NEW**: Interactive skip configuration prompt with multiple options:
-  - Number input (e.g., `1000`) to skip first N messages
-  - `0` or `no` to start from message 1 (no skip)
-  - `auto` to automatically detect first media message
-- **ENHANCED**: Smart first media detection functionality 
-- **IMPROVED**: User-friendly prompts with clear examples and instructions
-- Previous v2.7 features maintained:
+**Current Status: ✅ ENHANCED WITH AUDIO METADATA PRIORITY - v2.9 (2025-08-03)**
+- **FIXED**: Artist extraction now prioritizes audio file metadata over URL-extracted information
+- **ENHANCED**: Caption generation uses `message.audio.performer` and `message.audio.title` for accurate track info
+- **IMPROVED**: Backup channel captions now display actual artist names (e.g., "Dany Ome, Kevincito El 13" instead of "Unknown Artist")
+- **UPDATED**: File metadata extraction includes performer, title, and thumbnail from audio files
+- Previous v2.8 features maintained:
+  - Interactive skip configuration with multiple options (number, `0`/`no`, `auto`)
+  - Smart first media detection functionality
+  - User-friendly prompts with clear examples and instructions
   - Minimal caption format (Title, Artist, Track ID only)
-  - Title and artist extraction from original caption lines
   - Enhanced MongoDB schema with title and artist fields
   - Progress bar with speed calculation in files/min
-  - Unlimited message processing (no 1000 limit)
-  - Proper rate limiting at 20 messages per minute
+  - Unlimited message processing with proper rate limiting
 - Previous features maintained:
   - Link extraction working perfectly with both \u2063 and \u00ad characters
   - Advanced \u2063 character detection in "info" sections for embedded URL extraction
