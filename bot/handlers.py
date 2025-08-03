@@ -25,6 +25,9 @@ indexing_process = {
     "stop_requested": False
 }
 
+# Global storage for pending skip configurations
+pending_skip_configs = {}
+
 async def handle_media_message(client: Client, message: Message):
     """Handle incoming media messages and index them"""
     try:
@@ -505,7 +508,7 @@ async def handle_stats_command(client: Client, message: Message):
         await message.reply("Failed to retrieve statistics.")
 
 async def handle_message_link(client: Client, message: Message):
-    """Handle message links to start indexing"""
+    """Handle message links to ask for skip configuration and start indexing"""
     global indexing_process
     
     if indexing_process["active"]:
@@ -540,18 +543,8 @@ async def handle_message_link(client: Client, message: Message):
                 
                 chat_title = getattr(chat, 'title', None) or getattr(chat, 'username', None) or channel_username
                 
-                # Check if there's previous indexing progress
-                last_indexed = db.get_stored_last_indexed_message_id(chat_id)
-                
-                if last_indexed > 1:
-                    resume_start = last_indexed + 1
-                    await message.reply(f"🔄 Found previous progress for {chat_title}\n"
-                                      f"Last indexed: Message {last_indexed}\n"
-                                      f"Will resume from: Message {resume_start}\n"
-                                      f"Target: Message {message_id}")
-                    await start_indexing_process(client, message, chat_id, resume_start, chat_title, message_id)
-                else:
-                    await start_indexing_process(client, message, chat_id, 1, chat_title, message_id)
+                # Ask for skip configuration
+                await ask_skip_configuration(client, message, chat_id, chat_title, message_id, "message_link")
                 
             except ChannelPrivate:
                 await message.reply(f"""
@@ -1363,15 +1356,125 @@ async def generate_csv_export(client: Client, message: Message, files):
         await message.reply(f"❌ Failed to generate CSV export: {str(e)}")
 
 async def handle_forwarded_message(client: Client, message: Message):
-    """Handle forwarded messages to automatically start indexing"""
+    """Handle forwarded messages to ask for skip configuration and start indexing"""
     global indexing_process
     
     if message.forward_from_chat and not indexing_process["active"]:
         chat_id = message.forward_from_chat.id
-        start_message_id = message.forward_from_message_id
+        forwarded_message_id = message.forward_from_message_id
         chat_title = message.forward_from_chat.title or message.forward_from_chat.username
         
-        await start_indexing_process(client, message, chat_id, start_message_id, chat_title)
+        # Ask for skip configuration before starting
+        await ask_skip_configuration(client, message, chat_id, chat_title, forwarded_message_id, "forwarded")
+
+async def ask_skip_configuration(client: Client, message: Message, chat_id: int, chat_title: str, target_message_id: int, source_type: str):
+    """Ask user for skip message configuration before starting indexing"""
+    global pending_skip_configs
+    
+    user_id = message.from_user.id
+    
+    # Store the configuration request
+    pending_skip_configs[user_id] = {
+        "chat_id": chat_id,
+        "chat_title": chat_title,
+        "target_message_id": target_message_id,
+        "source_type": source_type,
+        "requesting_message": message
+    }
+    
+    # Create the prompt message
+    prompt_text = f"""🎯 **Indexing Configuration Required**
+
+📂 **Channel:** {chat_title}
+🎯 **Target Message:** {target_message_id}
+📋 **Source:** {source_type.title()} message
+
+⚙️ **Skip Configuration:**
+Do you want to skip any messages during indexing?
+
+Reply with:
+• **Number** (e.g., `1000`) - Skip first 1000 messages
+• **0** or **no** - Don't skip any messages (start from message 1)
+• **auto** - Use smart detection (skip to first media message)
+
+💡 **Examples:**
+- `500` - Skip first 500 messages, start indexing from message 501
+- `0` - Start indexing from message 1
+- `auto` - Automatically find first media message and start there"""
+
+    await message.reply(prompt_text)
+
+async def handle_skip_response(client: Client, message: Message):
+    """Handle user response to skip configuration"""
+    global pending_skip_configs
+    
+    user_id = message.from_user.id
+    
+    if user_id not in pending_skip_configs:
+        return False  # Not a skip response
+    
+    try:
+        config = pending_skip_configs[user_id]
+        response_text = message.text.strip().lower()
+        
+        chat_id = config["chat_id"]
+        chat_title = config["chat_title"]
+        target_message_id = config["target_message_id"]
+        
+        # Parse the response
+        skip_messages = 0
+        start_message_id = 1
+        
+        if response_text in ["0", "no", "none"]:
+            skip_messages = 0
+            start_message_id = 1
+            await message.reply(f"✅ Starting indexing from message 1 (no skip)")
+            
+        elif response_text == "auto":
+            await message.reply(f"🔍 Auto-detecting first media message...")
+            first_media_id = await find_first_message_with_media(client, chat_id)
+            if first_media_id:
+                start_message_id = first_media_id
+                skip_messages = first_media_id - 1
+                await message.reply(f"✅ Auto-detected first media at message {first_media_id}")
+            else:
+                start_message_id = 1
+                await message.reply(f"⚠️ No media found, starting from message 1")
+                
+        elif response_text.isdigit():
+            skip_messages = int(response_text)
+            start_message_id = skip_messages + 1
+            await message.reply(f"✅ Skipping first {skip_messages} messages, starting from message {start_message_id}")
+            
+        else:
+            await message.reply(f"❌ Invalid response. Please reply with a number, 'auto', or '0'")
+            return True  # Response processed but invalid
+        
+        # Remove from pending configs
+        del pending_skip_configs[user_id]
+        
+        # Start the indexing process
+        await start_indexing_process(client, message, chat_id, start_message_id, chat_title, target_message_id)
+        
+        return True  # Response processed successfully
+        
+    except Exception as e:
+        logger.error(f"Error processing skip response: {e}")
+        await message.reply(f"❌ Error processing response: {str(e)}")
+        # Don't remove from pending configs on error
+        return True
+
+async def handle_text_message(client: Client, message: Message):
+    """Handle text messages - check if they are skip responses"""
+    try:
+        # First, try to handle as skip response
+        if await handle_skip_response(client, message):
+            return  # Was a skip response, handled successfully
+            
+        # If not a skip response, ignore (could add other text handling here)
+        
+    except Exception as e:
+        logger.error(f"Error handling text message: {e}")
 
 async def auto_start_spotifyapk_indexing(client: Client, message: Message):
     """Auto-start indexing from Spotifyapk56 channel starting from message 18149251"""
@@ -1560,5 +1663,8 @@ def setup_handlers(app: Client):
     
     # Forwarded message handler for automatic indexing
     app.on_message(filters.forwarded & ~filters.bot)(handle_forwarded_message)
+    
+    # Text message handler for skip responses (must be registered last to catch remaining text)
+    app.on_message(filters.text & ~filters.bot)(handle_text_message)
     
     logger.info("All handlers registered successfully")

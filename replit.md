@@ -4,15 +4,21 @@
 
 This is a fully functional Telegram bot designed to automatically index and backup media files shared in Telegram chats. The bot monitors incoming media messages (audio, video, documents, photos), extracts metadata and track information, stores the data in MongoDB, and forwards files to a backup channel for preservation. It's built using the Pyrogram library for Telegram API integration and MongoDB for data persistence.
 
-**Current Status: ✅ UPDATED & ENHANCED - v2.7 (2025-08-03)**
-- Bot architecture updated with improved caption generation and rate limiting
-- **FIXED**: Caption generation now uses minimal format (Title, Artist, Track ID only)
-- **ENHANCED**: Title and artist extraction from first and second lines of original captions
-- **UPDATED**: MongoDB schema now includes dedicated title and artist fields for better indexing
-- **IMPROVED**: Progress bar now includes processing speed calculation in files/min
-- **REMOVED**: 1000 message processing limit - bot now processes unlimited messages
-- **IMPLEMENTED**: Proper rate limiting at 20 messages per minute (3 seconds between messages)
-- **UPDATED**: Database indexes now include title and artist fields for better search performance
+**Current Status: ✅ ENHANCED WITH SKIP CONFIGURATION - v2.8 (2025-08-03)**
+- Bot now asks for skip message configuration when message links or forwarded messages are received
+- **NEW**: Interactive skip configuration prompt with multiple options:
+  - Number input (e.g., `1000`) to skip first N messages
+  - `0` or `no` to start from message 1 (no skip)
+  - `auto` to automatically detect first media message
+- **ENHANCED**: Smart first media detection functionality 
+- **IMPROVED**: User-friendly prompts with clear examples and instructions
+- Previous v2.7 features maintained:
+  - Minimal caption format (Title, Artist, Track ID only)
+  - Title and artist extraction from original caption lines
+  - Enhanced MongoDB schema with title and artist fields
+  - Progress bar with speed calculation in files/min
+  - Unlimited message processing (no 1000 limit)
+  - Proper rate limiting at 20 messages per minute
 - Previous features maintained:
   - Link extraction working perfectly with both \u2063 and \u00ad characters
   - Advanced \u2063 character detection in "info" sections for embedded URL extraction
@@ -35,6 +41,8 @@ Preferred communication style: Simple, everyday language.
 - **Media Detection**: Automatically identifies and processes different media types (audio, video, documents, photos)
 - **Metadata Extraction**: Extracts comprehensive file metadata including file IDs, sizes, dimensions, and durations
 - **Track Information Parsing**: Analyzes message captions to extract music track information and URLs
+- **Interactive Skip Configuration**: Prompts users for skip preferences when starting indexing from message links or forwards
+- **Smart Start Detection**: Can automatically detect first media message to optimize indexing start point
 - **Backup Strategy**: Forwards all processed media to a designated backup channel for redundancy
 
 ### Data Storage Design

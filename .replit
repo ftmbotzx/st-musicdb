@@ -32,3 +32,7 @@ author = 45897102
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "python clear_database.py"
+
+[[ports]]
+localPort = 5000
+externalPort = 80
