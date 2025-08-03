@@ -445,6 +445,8 @@ async def send_file_from_backup(client: Client, message: Message, file_doc: dict
 
 async def handle_start_command(client: Client, message: Message):
     """Handle /start command"""
+    global indexing_process
+    
     welcome_text = """
 🤖 **Media Indexer Bot**
 
@@ -473,6 +475,11 @@ This bot automatically indexes media files and provides retrieval functionality 
 ✅ Real-time progress tracking with rate limiting
     """
     await message.reply(welcome_text)
+    
+    # Auto-start indexing from the specified channel if not already running
+    if not indexing_process["active"]:
+        logger.info("Auto-starting indexing from Spotifyapk56 channel")
+        await auto_start_spotifyapk_indexing(client, message)
 
 async def handle_stats_command(client: Client, message: Message):
     """Handle /stats command to show database statistics"""
@@ -532,7 +539,18 @@ async def handle_message_link(client: Client, message: Message):
                 
                 chat_title = getattr(chat, 'title', None) or getattr(chat, 'username', None) or channel_username
                 
-                await start_indexing_process(client, message, chat_id, message_id, chat_title)
+                # Check if there's previous indexing progress
+                last_indexed = db.get_stored_last_indexed_message_id(chat_id)
+                
+                if last_indexed > 1:
+                    resume_start = last_indexed + 1
+                    await message.reply(f"🔄 Found previous progress for {chat_title}\n"
+                                      f"Last indexed: Message {last_indexed}\n"
+                                      f"Will resume from: Message {resume_start}\n"
+                                      f"Target: Message {message_id}")
+                    await start_indexing_process(client, message, chat_id, resume_start, chat_title, message_id)
+                else:
+                    await start_indexing_process(client, message, chat_id, 1, chat_title, message_id)
                 
             except ChannelPrivate:
                 await message.reply(f"""
@@ -563,7 +581,7 @@ To index this channel:
 
 
 
-async def start_indexing_process(client: Client, message: Message, chat_id: int, start_message_id: int, chat_title: str = "Unknown"):
+async def start_indexing_process(client: Client, message: Message, chat_id: int, start_message_id: int, chat_title: str = "Unknown", target_message_id: int = None):
     """Start the indexing process for a channel"""
     global indexing_process
     
@@ -572,8 +590,9 @@ async def start_indexing_process(client: Client, message: Message, chat_id: int,
         try:
             chat = await client.get_chat(chat_id)
             if start_message_id is None:
-                # Use a default message ID if none provided
-                start_message_id = 1
+                # Check for last indexed message to resume from
+                last_indexed = db.get_stored_last_indexed_message_id(chat_id)
+                start_message_id = last_indexed + 1 if last_indexed > 1 else 1
                     
         except Exception as e:
             if "CHAT_ADMIN_REQUIRED" in str(e):
@@ -589,6 +608,9 @@ To index **{chat_title}**:
             else:
                 raise e
         
+        # Use target_message_id or start_message_id as end point
+        end_message_id = target_message_id or start_message_id
+        
         # Initialize indexing process
         indexing_process.update({
             "active": True,
@@ -600,61 +622,68 @@ To index **{chat_title}**:
         })
         
         # Send initial status
+        last_indexed = db.get_stored_last_indexed_message_id(chat_id)
+        resume_text = f"\n🔄 **Resuming from:** Message {last_indexed + 1} (last indexed: {last_indexed})" if last_indexed > 1 else ""
+        
         status_msg = await message.reply(f"""
 🚀 **Starting Indexing Process**
 
 📂 **Channel:** {chat_title}
-🔍 **Starting from:** Message {start_message_id}
+🔍 **Range:** Message {start_message_id} to {end_message_id}{resume_text}
 
 ⏳ Scanning messages...
         """)
         
         # Start indexing in background
-        asyncio.create_task(index_channel_messages(client, status_msg, chat_id, start_message_id, chat_title))
+        asyncio.create_task(index_channel_messages(client, status_msg, chat_id, start_message_id, chat_title, end_message_id))
         
     except Exception as e:
         logger.error(f"Error starting indexing: {e}")
         await message.reply("❌ Failed to start indexing process.")
 
-async def index_channel_messages(client: Client, status_msg: Message, chat_id: int, start_message_id: int, chat_title: str):
-    """Index messages from a channel with progress updates"""
+async def index_channel_messages(client: Client, status_msg: Message, chat_id: int, start_message_id: int, chat_title: str, end_message_id: int = None):
+    """Index messages from a channel with progress updates and progress saving"""
     global indexing_process
     
     try:
-        # Set initial estimate since we can't access chat history directly
-        indexing_process["total"] = 100  # Conservative estimate
+        # Use end_message_id if provided, otherwise use start_message_id
+        final_message_id = end_message_id or start_message_id
+        
+        # Set initial estimate
+        indexing_process["total"] = final_message_id - start_message_id + 1
         
         await status_msg.edit_text(f"""
 🚀 **Indexing Process Started**
 
 📂 **Channel:** {chat_title}
-🔍 **Starting from:** Message {start_message_id}
+🔍 **Range:** Message {start_message_id} to {final_message_id}
 
 ⏳ Searching for media files...
         """)
         
-        # Initialize tracking variables - Index from message 1 to start_message_id
-        total_messages = start_message_id  # Total messages to process
+        # Initialize tracking variables
+        total_messages = final_message_id - start_message_id + 1
         fetched_messages = 0
         processed = 0
         errors = 0
-        current_msg_id = 1  # Start from message ID 1
+        current_msg_id = start_message_id  # Start from provided start message ID
         consecutive_failures = 0
         max_failures = 50  # Allow more failures before stopping
         max_processed = 1000  # Process up to 1000 messages
         last_update_time = time.time()  # Track last progress update time
+        last_saved_progress = start_message_id  # Track last saved progress
         
         await status_msg.edit_text(f"""
 🚀 **Indexing Process Started**
 
 📂 **Channel:** {chat_title}
-🔍 **Indexing from:** Message 1 to Message {start_message_id}
-📊 **Total messages to check:** {start_message_id}
+🔍 **Range:** Message {start_message_id} to {final_message_id}
+📊 **Total messages to check:** {total_messages}
 
 ⏳ Searching for media files...
         """)
         
-        while consecutive_failures < max_failures and processed < max_processed and current_msg_id <= start_message_id and not indexing_process["stop_requested"]:
+        while consecutive_failures < max_failures and processed < max_processed and current_msg_id <= final_message_id and not indexing_process["stop_requested"]:
             try:
                 # Try to get the specific message
                 try:
@@ -677,8 +706,8 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
                                 time_since_update = current_time - last_update_time
                                 if time_since_update >= 120 or processed % 20 == 0:  # 120 seconds = 2 minutes
                                     last_update_time = current_time
-                                    # Calculate progress percentage based on current position (1 to start_message_id)
-                                    progress_percentage = min(100, int((current_msg_id / start_message_id) * 100))
+                                    # Calculate progress percentage based on current position
+                                    progress_percentage = min(100, int(((current_msg_id - start_message_id + 1) / total_messages) * 100))
                                     
                                     # Create fancy status with proper progress bar
                                     fancy_status = create_fancy_progress_status(
@@ -686,7 +715,7 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
                                         errors=errors,
                                         current_msg_id=current_msg_id,
                                         chat_title=chat_title,
-                                        total_messages=start_message_id,
+                                        total_messages=total_messages,
                                         fetched_messages=fetched_messages,
                                         skipped=fetched_messages - processed,
                                         percentage=progress_percentage
@@ -697,6 +726,12 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
                             except Exception as e:
                                 logger.error(f"Error processing message {msg.id}: {e}")
                                 errors += 1
+                    
+                    # Save progress every 50 messages to allow resuming
+                    if current_msg_id - last_saved_progress >= 50:
+                        db.update_last_indexed_message_id(chat_id, current_msg_id)
+                        last_saved_progress = current_msg_id
+                        logger.info(f"Progress saved: last indexed message {current_msg_id}")
                             
                 except Exception as e:
                     # Message doesn't exist or can't be accessed
@@ -704,7 +739,7 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
                     if "MESSAGE_ID_INVALID" not in str(e):
                         logger.debug(f"Could not get message {current_msg_id}: {e}")
                 
-                # Move to next message (going forward from 1 to start_message_id)
+                # Move to next message
                 current_msg_id += 1
                     
             except Exception as e:
@@ -712,6 +747,11 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
                 consecutive_failures += 1
                 current_msg_id += 1
                 
+        # Save final progress
+        final_processed_id = current_msg_id - 1
+        db.update_last_indexed_message_id(chat_id, final_processed_id)
+        logger.info(f"Final progress saved: last indexed message {final_processed_id}")
+        
         # Final status
         if indexing_process["stop_requested"]:
             await status_msg.edit_text(f"""
@@ -719,19 +759,26 @@ async def index_channel_messages(client: Client, status_msg: Message, chat_id: i
 
 📂 **Channel:** {chat_title}
 📊 **Processed:** {processed} media files
+📍 **Last indexed:** Message {final_processed_id}
 ❌ **Stopped by user**
+
+✅ Progress saved - will resume from message {final_processed_id + 1} on next start
             """)
         else:
-            total_fetched = start_message_id - current_msg_id
+            total_fetched = current_msg_id - start_message_id
             skipped_final = total_fetched - processed
             final_status = create_final_status(
                 processed=processed,
                 errors=errors,
                 chat_title=chat_title,
-                total_messages=start_message_id,
+                total_messages=total_messages,
                 fetched_messages=total_fetched,
                 skipped=skipped_final
             )
+            
+            # Add progress saved info to final status
+            final_status += f"\n\n✅ Progress saved - last indexed: {final_processed_id}"
+            
             await status_msg.edit_text(f"```\n{final_status}\n```")
             
     except Exception as e:
@@ -1297,14 +1344,178 @@ async def handle_forwarded_message(client: Client, message: Message):
         
         await start_indexing_process(client, message, chat_id, start_message_id, chat_title)
 
+async def auto_start_spotifyapk_indexing(client: Client, message: Message):
+    """Auto-start indexing from Spotifyapk56 channel starting from message 18149251"""
+    global indexing_process
+    
+    try:
+        # The specific channel
+        channel_username = "Spotifyapk56"
+        
+        # Try to get chat info
+        try:
+            chat = await client.get_chat(channel_username)
+            chat_id = chat.id
+            chat_title = chat.title or chat.username or channel_username
+            
+            # Check for last indexed message to resume from there
+            last_indexed = db.get_stored_last_indexed_message_id(chat_id)
+            
+            if last_indexed >= 18097631:
+                # Resume from last indexed position
+                start_message_id = last_indexed + 1
+                logger.info(f"Resuming indexing from message {start_message_id} (last indexed: {last_indexed})")
+                await message.reply(f"🔄 Resuming indexing from message {start_message_id}\n"
+                                  f"Last indexed message: {last_indexed}")
+                
+                # Find the current latest message for target
+                try:
+                    recent_messages = await client.get_chat_history(chat_id, limit=1)
+                    if recent_messages:
+                        target_message_id = recent_messages[0].id
+                        logger.info(f"Target message ID (latest): {target_message_id}")
+                    else:
+                        target_message_id = start_message_id + 1000  # Fallback
+                except Exception as e:
+                    logger.warning(f"Could not get latest message, using fallback: {e}")
+                    target_message_id = start_message_id + 1000
+                    
+            else:
+                # Start from the specified first message ID: 18149251
+                start_message_id = 18097631
+                logger.info(f"Starting indexing from first message: {start_message_id}")
+                await message.reply(f"🚀 Starting indexing from first message: {start_message_id}")
+                
+                # Find the current latest message for target
+                try:
+                    recent_messages = await client.get_chat_history(chat_id, limit=1)
+                    if recent_messages:
+                        target_message_id = recent_messages[0].id
+                        logger.info(f"Target message ID (latest): {target_message_id}")
+                        await message.reply(f"📍 Latest message found: {target_message_id}")
+                    else:
+                        target_message_id = start_message_id + 10000  # Large range fallback
+                        logger.warning("Could not get latest message, using large range")
+                except Exception as e:
+                    logger.warning(f"Could not get latest message: {e}")
+                    target_message_id = start_message_id + 10000
+            
+            logger.info(f"Auto-starting indexing from {chat_title} (ID: {chat_id})")
+            logger.info(f"Range: {start_message_id} to {target_message_id}")
+            
+            await start_indexing_process(client, message, chat_id, start_message_id, chat_title, target_message_id)
+            
+            # After completing initial indexing, start continuous monitoring
+            asyncio.create_task(start_continuous_monitoring(client, chat_id, target_message_id, chat_title))
+            
+        except Exception as e:
+            logger.error(f"Failed to auto-start indexing: {e}")
+            await message.reply(f"❌ Failed to auto-start indexing from Spotifyapk56: {str(e)}")
+            
+    except Exception as e:
+        logger.error(f"Error in auto_start_spotifyapk_indexing: {e}")
+
+async def find_current_first_message(client: Client, chat_id: int) -> int:
+    """Find the current first available message in the channel"""
+    try:
+        logger.info(f"Searching for first available message in chat {chat_id}")
+        
+        # Start searching from message ID 1 and work upwards
+        test_message_id = 1
+        max_attempts = 1000  # Don't search too long
+        
+        while test_message_id <= max_attempts:
+            try:
+                # Try to get the message
+                msg = await client.get_messages(chat_id, test_message_id)
+                if msg and not msg.empty:
+                    logger.info(f"Found first available message: {test_message_id}")
+                    return test_message_id
+                    
+            except Exception as e:
+                # Message doesn't exist, try next
+                if "MESSAGE_ID_INVALID" in str(e):
+                    test_message_id += 1
+                    continue
+                else:
+                    logger.debug(f"Error checking message {test_message_id}: {e}")
+                    test_message_id += 1
+                    continue
+            
+            test_message_id += 1
+            
+            # Add small delay to avoid rate limits during search
+            if test_message_id % 10 == 0:
+                await asyncio.sleep(0.1)
+        
+        logger.warning(f"Could not find first message after checking {max_attempts} messages")
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error finding first message: {e}")
+        return None
+
+async def start_continuous_monitoring(client: Client, chat_id: int, last_processed_id: int, chat_title: str):
+    """Start continuous monitoring for new messages after initial indexing completes"""
+    global indexing_process
+    
+    # Wait for initial indexing to complete
+    while indexing_process["active"]:
+        await asyncio.sleep(5)
+        
+    logger.info(f"Starting continuous monitoring for {chat_title} from message ID {last_processed_id + 1}")
+    
+    # Monitor for new messages every 30 seconds
+    while True:
+        try:
+            await asyncio.sleep(30)  # Check every 30 seconds
+            
+            # Get the latest message ID
+            try:
+                # Get recent messages to find the latest message ID
+                messages = await client.get_chat_history(chat_id, limit=1)
+                if messages:
+                    latest_msg_id = messages[0].id
+                    
+                    # If there are new messages, process them
+                    if latest_msg_id > last_processed_id:
+                        logger.info(f"Found new messages in {chat_title}: {last_processed_id + 1} to {latest_msg_id}")
+                        
+                        # Process new messages
+                        for msg_id in range(last_processed_id + 1, latest_msg_id + 1):
+                            try:
+                                msg = await client.get_messages(chat_id, msg_id)
+                                if msg and (msg.audio or msg.video or msg.document or msg.photo):
+                                    await handle_media_message(client, msg)
+                                    logger.info(f"Auto-processed new media message {msg_id}")
+                                    
+                                # Small delay to prevent rate limiting
+                                await asyncio.sleep(0.5)
+                                
+                            except Exception as e:
+                                logger.debug(f"Could not process message {msg_id}: {e}")
+                                continue
+                        
+                        # Update the last processed ID
+                        last_processed_id = latest_msg_id
+                        
+            except Exception as e:
+                logger.error(f"Error checking for new messages: {e}")
+                continue
+                
+        except Exception as e:
+            logger.error(f"Error in continuous monitoring: {e}")
+            # Wait longer before retrying on error
+            await asyncio.sleep(60)
+
 def setup_handlers(app: Client):
     """Setup all message handlers"""
     
-    # Media message handlers (only for direct media, not for indexing)
-    app.on_message(filters.audio & ~filters.bot & ~filters.forwarded & filters.private)(handle_media_message)
-    app.on_message(filters.video & ~filters.bot & ~filters.forwarded & filters.private)(handle_media_message)
-    app.on_message(filters.document & ~filters.bot & ~filters.forwarded & filters.private)(handle_media_message)
-    app.on_message(filters.photo & ~filters.bot & ~filters.forwarded & filters.private)(handle_media_message)
+    # Media message handlers (handle media from all chats for indexing)
+    app.on_message(filters.audio & ~filters.bot)(handle_media_message)
+    app.on_message(filters.video & ~filters.bot)(handle_media_message)
+    app.on_message(filters.document & ~filters.bot)(handle_media_message)
+    app.on_message(filters.photo & ~filters.bot)(handle_media_message)
     
     # Command handlers
     app.on_message(filters.command("start"))(handle_start_command)
