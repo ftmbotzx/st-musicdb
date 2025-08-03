@@ -1,0 +1,9 @@
+fpdf2
+openpyxl
+pymongo
+pyrogram
+python-dotenv
+reportlab
+flask
+tgcrypto
+xlsxwriter
